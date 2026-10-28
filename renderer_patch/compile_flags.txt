@@ -1,0 +1,9 @@
+--target=i686-w64-windows-gnu
+-xc++
+-std=c++17
+-D__MSVCRT_VERSION__=0xE00
+-D_WIN32_WINNT=0x0a00
+-isystem
+../tools/zig-python/ziglang/lib/libc/include/any-windows-any
+-isystem
+../tools/zig-python/ziglang/lib/include

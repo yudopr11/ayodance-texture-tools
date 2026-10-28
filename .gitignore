@@ -1,0 +1,48 @@
+# Local Python environment and caches
+/.venv/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Private/local game assets, outputs, tools and recovered evidence
+/original-data/
+/staging-esrgan-2x/
+/staging-renderer-pilot/
+/texture-work/
+/staging/
+/diagnostics/
+/tools/
+/ghidra_12.2_PUBLIC/
+/images/
+
+# Reproducible native build outputs and local backups
+/renderer_patch/build/
+/renderer_patch/test-backup/
+*.exe
+*.dll
+*.pdb
+*.obj
+*.o
+*.acv
+*.zip
+*.7z
+*.log
+*.tmp
+*.pending
+.texture-cache/
+*.acv.json
+*.acv.progress.json
+
+# Local credentials and editor/OS state
+.env
+.env.*
+*.pem
+*.key
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

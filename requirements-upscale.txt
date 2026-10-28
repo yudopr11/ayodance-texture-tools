@@ -1,0 +1,3 @@
+-r requirements-acv.txt
+# Real-ESRGAN RGB/alpha preparation and final downsampling.
+Pillow==11.3.0
