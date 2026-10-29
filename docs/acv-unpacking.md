@@ -122,6 +122,25 @@ check the game's policy; no checks or anti-cheat mechanisms were bypassed in the
 running client. Do not replace installed archives until you have independently
 validated a staged copy and have a recovery plan.
 
+### Automated UltraSharp staging
+
+See the [UltraSharp setup and commands](../README.md#ultrasharpv2-comparison-cpu-reference)
+for the optional CPU DAT backend. `--model` applies the selected 4× RGB DAT model
+(e.g. UltraSharpV2) to all DDS textures, including UI, text and fonts. Final size
+remains 2×, capped at 2048 on the longest side, with original alpha resized
+independently. The abandoned PyTorch/DirectML experiment produced artifacts;
+CPU reference output is not proof of GPU compatibility.
+
+The workflow decodes with texconv, enhances RGB, restores original alpha and DDS
+pixel format/mip policy, tags native dimensions, packs, then verifies replacement
+bytes and untouched stored payloads. Cache entries are untagged; receipts include
+tool/model/code/backend fingerprints. Keep one current output folder, `staging/`;
+never mix models into it or clean it while a job is running. Tagged sources are
+rejected: use `original-data/DATA`, not installed enhanced archives. Tiled DAT can
+introduce seams, and AI may change small lettering; inspect comparison images and
+use the compatible renderer shim before considering installation. No automatic
+installation occurs.
+
 ## Recovered format and implementation
 
 All integer fields are little-endian. A plain archive starts with a 32-bit count

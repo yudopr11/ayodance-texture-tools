@@ -3,8 +3,8 @@
 Unpack, edit, upscale and repack AyoDance texture archives without modifying the
 original input files. Supports plain ACVs and tagged formats **1, 2, 3, 5 and 6**.
 
-**Local batch status:** stopped at the owner's request. Existing staged archives,
-receipts and the AI cache are preserved; no batch starts automatically.
+**Local batch status:** no full batch running. The current UltraSharpV2 comparison
+pilot is under `staging/`; no batch starts automatically.
 
 ## Project layout
 
@@ -19,8 +19,8 @@ docs/              Format guide and historical research
 The following are local, Git-ignored assets—not included with the source:
 
 - `original-data/DATA/`: untouched backup archives; the upscale source.
-- `staging-esrgan-2x/`: staged output, receipts, logs and `.texture-cache/`.
-- `staging-renderer-pilot/`: renderer test archives and audit records.
+- `staging/`: current enhanced archives, receipts, `.texture-cache/` and `preview/`.
+- Historical staging folders, if retained locally, are not current outputs.
 - `tools/`: downloaded converters, ESRGAN models and the local compiler.
 - `diagnostics/`: offline evidence and examples; reports are grouped under
   `reports/`, `decompilation/` and `audit/`. See the [diagnostics guide](docs/diagnostics.md).
@@ -57,12 +57,55 @@ script paths. See [the format and unpacking guide](docs/acv-unpacking.md).
 
 ## AI upscaling for a 1440p / “2K” display
 
-The current preset uses **Real-ESRGAN x4plus** for 4× RGB enhancement, then Lanczos
-downsamples to **2× source dimensions**, capped at **2048 pixels on the longest
-side**. It does not resize every texture to 2048×2048. Alpha comes from the original,
-resized separately. Textures at or above the cap remain unchanged. Doubling both
-texture dimensions means roughly four times the texture memory; display resolution
-alone does not determine an ideal texture size.
+The current comparison preset uses **UltraSharpV2 (DAT2) for every DDS texture**,
+including UI, HUD, text and fonts. The model's 4× RGB result is downsampled with
+Lanczos to **2× source dimensions**, capped at **2048 pixels on the longest side**.
+Alpha comes from the original, resized separately with Lanczos. Textures at or
+above the cap remain unchanged. This does not turn every texture into 2048×2048.
+Doubling both dimensions uses roughly four times the texture memory.
+
+### UltraSharpV2 comparison (CPU reference)
+
+Install the optional backend into this project's `.venv` (Python **3.11 or 3.12**).
+Obtain `4x-UltraSharpV2.safetensors` from the author's
+[Hugging Face repository](https://huggingface.co/Kim2091/UltraSharpV2), linked by
+[OpenModelDB](https://openmodeldb.info/models/4x-UltraSharpV2), and place it under
+`tools/ultrasharp/`. Its license is **CC-BY-NC-SA-4.0**, not PBRify's CC0; check the
+license before distributing derivatives or using it commercially. The published
+safetensors SHA-256 is `2b5db674aa8f3864a696dccd1d07d7cc0500fbf220f35044cd30eee9a7f971a7`.
+Models and converters are not included in Git. Use only trusted state dictionaries.
+
+```powershell
+uv pip install --python .venv/Scripts/python.exe -r requirements-dat.txt
+# CPU reference: bound thread overhead, then process one small mixed archive.
+$env:OMP_NUM_THREADS = '8'
+$env:MKL_NUM_THREADS = '8'
+.\.venv\Scripts\python.exe -B -m acv_tools.acv_upscale original-data/DATA/039.acv staging --model tools/ultrasharp/4x-UltraSharpV2.safetensors --workers 1
+```
+
+- **CPU FP32 only** for `--model` at present: the experimental PyTorch/DirectML DAT
+  path produced visible, nondeterministic artifacts on the local AMD setup and is
+  not offered as a supported backend. CPU pilot success does not validate GPU use.
+  A full CPU batch is much slower than the old Vulkan workflow; inspect the pilot
+  before deciding whether to run it.
+- One persistent worker loads the model once. Inference uses 128-pixel input tiles
+  with 32-pixel context, cropped before stitching. DAT has global attention; tiled
+  inference is approximate and can show seams or color shifts.
+- `staging/preview/` holds local comparison PNGs, when generated. The comparison
+  shows original, Lanczos and actual repacked UltraSharp DDS pixels at equal display
+  size. AI may sharpen lettering incorrectly; very small text cannot be recovered
+  reliably, and original-alpha preservation can retain a soft outline.
+- Fingerprints include the model, converter, implementation, package versions,
+  precision and tiling policy. Cached DDS images remain untagged. A changed pipeline
+  refuses mismatched receipts; archive/move the old `staging/` safely before reusing
+  that one output location for a different model. Never clean an active batch.
+- `--model` and `--esrgan` are mutually exclusive. Without either, the legacy cubic
+  converter path remains available; it does not use UltraSharp.
+
+### Legacy Real-ESRGAN path
+
+The old all-AI workflow remains available, using **Real-ESRGAN x4plus** for 4× RGB
+followed by 2×/cap2048 final sizing. Do not reuse its cache as UltraSharp output.
 
 **Hardware example:** the RX 9070 XT is the GPU used on **my own machine**, not a
 requirement for yours. The NCNN Vulkan executable uses GPU index 0 in this pipeline;
@@ -79,7 +122,8 @@ These binaries and models are not distributed in this repository.
 
 ```powershell
 uv pip install --python .venv/Scripts/python.exe -r requirements-upscale.txt
-.\.venv\Scripts\python.exe -B -m acv_tools.acv_upscale original-data/DATA staging-esrgan-2x --esrgan tools/esrgan/realesrgan-ncnn-vulkan.exe --workers 1
+# Only in an empty staging/ or one already belonging to this exact pipeline:
+.\.venv\Scripts\python.exe -B -m acv_tools.acv_upscale original-data/DATA staging --esrgan tools/esrgan/realesrgan-ncnn-vulkan.exe --workers 1
 ```
 
 - Use untouched backups as input, **not already-enhanced installed game archives**.
@@ -90,7 +134,7 @@ uv pip install --python .venv/Scripts/python.exe -r requirements-upscale.txt
   It keeps UI layout at native size while uploading enlarged pixels. An unpatched
   client may show oversized/misaligned UI even if the archive itself verifies.
 - Each final `NNN.acv` has a `.acv.json` receipt with source/output SHA-256 hashes and
-  a fingerprint of the converter, AI executable and model files.
+  a pipeline fingerprint (converter/model/backend-specific inputs).
 - Identical inputs reuse a checksummed, untagged `.texture-cache/`. A matching rerun
   reuses verified archives; interrupted/unreceipted outputs are moved aside before
   rebuilding. Tool/model changes require a new staging directory.
@@ -108,6 +152,9 @@ Full test discovery also includes real converter/GPU integration tests when thei
 local executables exist; unlike the basic test command above, it can run ESRGAN:
 
 ```powershell
+# Safe DAT model/cache/tiling tests (mocked, no model inference):
+.\.venv\Scripts\python.exe -B -m unittest tests.test_dat_upscale -v
+# Integration tests: deliberately opt in only when no batch is active.
 .\.venv\Scripts\python.exe -B -m unittest discover -s tests -v
 ```
 

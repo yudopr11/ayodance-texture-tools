@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from importlib.metadata import version
 from pathlib import Path
 
 from .acv_pack import pack_archive
@@ -44,7 +45,17 @@ RENDERER = 'v64-tagged-dimensions-v1'
 MAGIC = b'ACVUI2X\0'
 
 
-def pipeline_identity(texconv, esrgan):
+def pipeline_identity(texconv, esrgan=None, model=None):
+    if model:
+        from . import dat_upscale as backend
+
+        files = [texconv, model, Path(__file__), Path(backend.__file__)]
+        packages = ['torch', 'torchvision', 'spandrel', 'numpy', 'Pillow']
+        identity = {'files': [digest(p) for p in files],
+                    'packages': {p: version(p) for p in packages}, 'device': 'cpu',
+                    'tile': backend.TILE, 'border': backend.BORDER, 'precision': 'fp32'}
+        fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        return 'dat4x-all-2x-cap2048-v1-' + fingerprint[:16]
     if not esrgan:
         return 'cubic-2x-cap2048-v1'
     files = [texconv, esrgan, esrgan.parent / 'models/realesrgan-x4plus.bin',
@@ -131,22 +142,27 @@ def ai_image(decoded, enlarged, size):
 
     with Image.open(decoded) as original, Image.open(enlarged) as enhanced:
         if enhanced.size != (original.width * 4, original.height * 4):
-            raise ValueError('ESRGAN output is not 4x the source dimensions')
+            raise ValueError('AI output is not 4x the source dimensions')
         rgb = enhanced.convert('RGB').resize(size, Image.Resampling.LANCZOS)
         alpha = original.convert('RGBA').getchannel('A').resize(size, Image.Resampling.LANCZOS)
         rgb.putalpha(alpha)
         rgb.save(enlarged)
 
 
-def resize_dds(raw, source, destination, texconv, esrgan=None, cache=None):
+def resize_dds(raw, source, destination, texconv, esrgan=None, cache=None, model=None):
+    if esrgan and model:
+        raise ValueError('Choose one AI model backend')
+    prepared = bool(esrgan or model)
     width, height, pixel_format = dds_info(raw)
+    if raw[32:40] == MAGIC:
+        raise ValueError('Source DDS already has renderer metadata; use the original archive')
     size = target_size(width, height)
     if size == (width, height):
         return False
     destination.mkdir(parents=True, exist_ok=True)
     output = destination / source.name
     cached = None
-    if esrgan and cache:
+    if prepared and cache:
         cache.mkdir(parents=True, exist_ok=True)
         cached = cache / (hashlib.sha256(raw).hexdigest() + '.dds')
         checksum = cached.with_suffix('.sha256')
@@ -158,31 +174,37 @@ def resize_dds(raw, source, destination, texconv, esrgan=None, cache=None):
     mips = 0 if struct.unpack_from('<I', raw, 28)[0] > 1 else 1
     command = [str(texconv), '-nologo', '-dx9', '-if', 'CUBIC', '-w', str(size[0]),
                '-h', str(size[1]), '-m', str(mips), '-o', str(destination), str(source)]
-    if esrgan:
+    if prepared:
         decoded = destination / 'input.png'
         enhanced = destination / 'enhanced.png'
         run_tool([texconv, '-nologo', '-y', '-ft', 'png', '-f', 'R8G8B8A8_UNORM',
                   '-m', '1', '-o', destination, source])
         # Feed RGB only; AI must not hallucinate the texture's transparency.
-        from PIL import Image
-        with Image.open(decoded) as image:
-            image.convert('RGB').save(destination / 'rgb.png')
-        run_tool([esrgan, '-i', destination / 'rgb.png', '-o', enhanced,
-                  '-n', 'realesrgan-x4plus', '-s', '4', '-t', '128',
-                  '-m', esrgan.parent / 'models', '-g', '0'])
+        if model:
+            from .dat_upscale import upscale_image
+            upscale_image(decoded, enhanced, model)
+        else:
+            from PIL import Image
+            if esrgan is None:
+                raise ValueError('AI enhancement requires a model backend')
+            with Image.open(decoded) as image:
+                image.convert('RGB').save(destination / 'rgb.png')
+            run_tool([esrgan, '-i', destination / 'rgb.png', '-o', enhanced,
+                      '-n', 'realesrgan-x4plus', '-s', '4', '-t', '128',
+                      '-m', esrgan.parent / 'models', '-g', '0'])
         ai_image(decoded, enhanced, size)
         command = [texconv, '-nologo', '-dx9', '-y', '-if', 'CUBIC', '-f', dds_format(raw),
                    '-m', str(mips), '-o', destination, enhanced]
     run_tool(command)
-    if esrgan:
+    if prepared:
         (destination / 'enhanced.dds').replace(output)
     if not output.exists():
         raise ValueError('texconv did not produce a DDS file')
     converted = output.read_bytes()
-    if esrgan and struct.unpack_from('<I', raw, 88)[0] == 24:
+    if prepared and struct.unpack_from('<I', raw, 88)[0] == 24:
         converted = restore_rgb24(converted, raw)
         output.write_bytes(converted)
-    elif esrgan and struct.unpack_from('<5I', raw, 88) == (16, 0x7c00, 0x3e0, 0x1f, 0):
+    elif prepared and struct.unpack_from('<5I', raw, 88) == (16, 0x7c00, 0x3e0, 0x1f, 0):
         # DXGI exposes RGB555 only with alpha; restore the original unused-X header.
         converted = converted[:76] + raw[76:108] + converted[108:]
         output.write_bytes(converted)
@@ -216,12 +238,12 @@ def verify_archive(source, output, replacements):
                     raise ValueError(f'Unchanged stored payload mismatch: {old[0]}')
 
 
-def process(source, staging, texconv, esrgan=None, pipeline=None):
+def process(source, staging, texconv, esrgan=None, pipeline=None, model=None):
     start = time.monotonic()
     output = staging / source.name
     receipt = staging / (source.name + '.json')
     source_hash = digest(source)
-    pipeline = pipeline or pipeline_identity(texconv, esrgan)
+    pipeline = pipeline or pipeline_identity(texconv, esrgan, model)
     saved = None
     if receipt.exists():
         try:
@@ -245,6 +267,9 @@ def process(source, staging, texconv, esrgan=None, pipeline=None):
                 path.rename(recovery / path.name)
     result = {'archive': source.name, 'textures': 0, 'resized': 0, 'at_cap': 0,
               'source_sha256': source_hash, 'pipeline': pipeline, 'renderer': RENDERER}
+    if model:
+        result['model'] = model.name
+        result['device'] = 'cpu'
     with tempfile.TemporaryDirectory(prefix=source.stem + '-', dir=staging) as temporary:
         work = Path(temporary)
         replacements = work / 'replacements'
@@ -264,7 +289,7 @@ def process(source, staging, texconv, esrgan=None, pipeline=None):
                 converted_dir = work / 'converted'
                 try:
                     resized = resize_dds(raw, incoming, converted_dir, texconv, esrgan,
-                                         staging / '.texture-cache' / pipeline)
+                                         staging / '.texture-cache' / pipeline, model)
                 except Exception as error:
                     raise ValueError(f'{entry[0]}: {error}') from error
                 if resized:
@@ -304,12 +329,15 @@ def main():
     parser.add_argument('staging', type=Path)
     parser.add_argument('--texconv', type=Path, default=Path('tools/texconv.exe'))
     parser.add_argument('--workers', type=int, default=1)
-    parser.add_argument('--esrgan', type=Path, help='NCNN Vulkan executable; enables real AI upscaling')
+    backend = parser.add_mutually_exclusive_group()
+    backend.add_argument('--esrgan', type=Path, help='NCNN Vulkan executable; enables Real-ESRGAN')
+    backend.add_argument('--model', type=Path, help='4x RGB DAT model, e.g. UltraSharpV2; all textures, CPU')
     args = parser.parse_args()
     source, staging, texconv = args.source.resolve(), args.staging.resolve(), args.texconv.resolve(strict=True)
     esrgan = args.esrgan.resolve(strict=True) if args.esrgan else None
-    if esrgan and args.workers != 1:
-        parser.error('Use one archive worker for the GPU pipeline and shared texture cache')
+    model = args.model.resolve(strict=True) if args.model else None
+    if (esrgan or model) and args.workers != 1:
+        parser.error('Use one archive worker for the AI pipeline and shared texture cache')
     source_dir = source if source.is_dir() else source.parent
     if staging == source_dir or staging.is_relative_to(source_dir):
         parser.error('Staging must be outside the original archive directory')
@@ -317,10 +345,11 @@ def main():
     if not archives or args.workers < 1:
         parser.error('Need archives and a positive worker count')
     staging.mkdir(parents=True, exist_ok=True)
-    pipeline = pipeline_identity(texconv, esrgan)
+    pipeline = pipeline_identity(texconv, esrgan, model)
     results = []
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
-        futures = {pool.submit(process, archive, staging, texconv, esrgan, pipeline): archive for archive in archives}
+        futures = {pool.submit(process, archive, staging, texconv, esrgan, pipeline,
+                               model): archive for archive in archives}
         for future in as_completed(futures):
             try:
                 result = future.result()

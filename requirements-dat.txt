@@ -1,0 +1,6 @@
+# Optional CPU reference backend for 4x RGB DAT models (UltraSharpV2).
+-r requirements-upscale.txt
+numpy==1.26.4
+spandrel==0.4.1
+torch==2.4.1
+torchvision==0.19.1

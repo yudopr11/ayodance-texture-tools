@@ -38,7 +38,7 @@ Historical research commands and paths are provenance, not current instructions.
   contain enhanced/tagged archives; it is not an untouched upscale source.
 - Publish separate staged outputs. Never overwrite originals or automatically
   install archives, DLLs or EXEs into the game directory.
-- Before starting/stopping a batch, inspect `staging-esrgan-2x/job.json`, progress
+- Before starting/stopping a batch, inspect `staging/job.json` (if present), progress
   files and the actual process command line. A stored PID or README status can be
   stale. Never kill a process based solely on a previously recorded PID.
 - Do not start a second job against the same staging/cache directory. Do not move,
@@ -50,9 +50,11 @@ Historical research commands and paths are provenance, not current instructions.
 - Preserve `.texture-cache/`, verified receipts, recovery directories and logs.
   Resume acceptance depends on source/output hashes, tool/model fingerprints and
   the renderer contract—not archive filenames or file counts alone.
-- Current preset: Real-ESRGAN x4plus RGB enhancement followed by 2× final dimensions,
-  capped at 2048 on the longest side; resize original alpha separately. Preserve
-  DDS pixel formats and mipmap policy. Do not AI-upscale an already-enhanced source.
+- Current comparison preset: UltraSharpV2 DAT2 RGB enhancement on all textures,
+  followed by 2× final dimensions, capped at 2048; resize original alpha separately.
+  Use `staging/` for current outputs. DAT CPU reference is supported; the local
+  PyTorch/DirectML experiment produced artifacts and is not a validated backend.
+  Preserve DDS pixel formats and mipmap policy. Never enhance an enhanced source.
 - Enlarged DDS files need native-layout metadata and the compatible shim to avoid
   oversized UI. Keep cached images untagged; add metadata when staging replacements.
 - Repacked replacements must decode to the intended bytes; untouched stored
@@ -67,8 +69,8 @@ Safe default regression command (PowerShell, no real converter/GPU workload):
 .\.venv\Scripts\python.exe -B -m unittest tests.test_acv_unpack tests.test_acv_pack tests.test_stage_renderer_pilot tests.test_cli -v
 ```
 
-Also run relevant synthetic/mocked methods in `tests.test_acv_upscale` when changing
-upscaling logic. **Full test discovery can launch installed external tools and
+Also run `tests.test_dat_upscale` and relevant synthetic/mocked methods in
+`tests.test_acv_upscale` when changing upscaling logic. **Full test discovery can launch installed external tools and
 ESRGAN**: `test_ai_legacy_pixel_formats` and
 `test_resize_repack_verify_and_resume` are integration tests, not safe defaults
 while a GPU batch is active. Do not start integration tests, graphics probes,
