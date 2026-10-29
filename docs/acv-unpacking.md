@@ -85,8 +85,8 @@ validation covers all entries; payload sampling is not an exhaustive verificatio
 of all 233,158 payloads. These figures describe the initial container verification;
 subsequent AI output and limited live renderer tests are documented separately in
 the [project README](../README.md) and [renderer guide](../renderer_patch/README.md).
-The full upscale batch is currently stopped; this is not a claim of 330 enhanced,
-game-tested outputs.
+These checks are not a claim of 330 enhanced, game-tested outputs. For current batch
+state, inspect `staging/job.json`, progress files and actual process command lines.
 
 ## Important limits
 
@@ -125,11 +125,14 @@ validated a staged copy and have a recovery plan.
 ### Automated UltraSharp staging
 
 See the [UltraSharp setup and commands](../README.md#ultrasharpv2-comparison-cpu-reference)
-for the optional CPU DAT backend. `--model` applies the selected 4× RGB DAT model
-(e.g. UltraSharpV2) to all DDS textures, including UI, text and fonts. Final size
-remains 2×, capped at 2048 on the longest side, with original alpha resized
-independently. The abandoned PyTorch/DirectML experiment produced artifacts;
-CPU reference output is not proof of GPU compatibility.
+for the optional DAT backends. `--model` uses CPU for `.safetensors`/`.pth` or
+Windows DirectML GPU adapter 0 for the author's FP32 `.onnx` export; see the
+[GPU setup](../README.md#ultrasharpv2-gpu-onnxdirectml). It applies the selected 4×
+RGB DAT model (e.g. UltraSharpV2) to all DDS textures, including UI, text and fonts.
+Final size remains 2×, capped at 2048 on the longest side, with original alpha
+resized independently. The abandoned PyTorch/DirectML experiment produced artifacts;
+the separate ONNX/DirectML path matched the CPU reference in a four-texture pilot,
+not exhaustive GPU or live-game validation.
 
 The workflow decodes with texconv, enhances RGB, restores original alpha and DDS
 pixel format/mip policy, tags native dimensions, packs, then verifies replacement

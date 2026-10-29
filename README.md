@@ -3,8 +3,8 @@
 Unpack, edit, upscale and repack AyoDance texture archives without modifying the
 original input files. Supports plain ACVs and tagged formats **1, 2, 3, 5 and 6**.
 
-**Local batch status:** no full batch running. The current UltraSharpV2 comparison
-pilot is under `staging/`; no batch starts automatically.
+**Local batch status:** inspect `staging/job.json`, progress files and live process
+command lines. Git does not track running-job state; no batch starts automatically.
 
 ## Project layout
 
@@ -83,10 +83,9 @@ $env:MKL_NUM_THREADS = '8'
 .\.venv\Scripts\python.exe -B -m acv_tools.acv_upscale original-data/DATA/039.acv staging --model tools/ultrasharp/4x-UltraSharpV2.safetensors --workers 1
 ```
 
-- **CPU FP32 only** for `--model` at present: the experimental PyTorch/DirectML DAT
-  path produced visible, nondeterministic artifacts on the local AMD setup and is
-  not offered as a supported backend. CPU pilot success does not validate GPU use.
-  A full CPU batch is much slower than the old Vulkan workflow; inspect the pilot
+- `.safetensors` and `.pth` use **CPU FP32**. The experimental PyTorch/DirectML
+  DAT path produced visible artifacts and is not used. For the separately tested
+  ONNX/DirectML GPU path, see below. A full CPU batch is much slower; inspect a pilot
   before deciding whether to run it.
 - One persistent worker loads the model once. Inference uses 128-pixel input tiles
   with 32-pixel context, cropped before stitching. DAT has global attention; tiled
@@ -101,6 +100,30 @@ $env:MKL_NUM_THREADS = '8'
   that one output location for a different model. Never clean an active batch.
 - `--model` and `--esrgan` are mutually exclusive. Without either, the legacy cubic
   converter path remains available; it does not use UltraSharp.
+
+### UltraSharpV2 GPU (ONNX/DirectML)
+
+On Windows, a trusted `.onnx` supplied to `--model` selects **DirectML GPU adapter
+0**, not PyTorch. Obtain the author's `4x-UltraSharpV2_fp32_op17.onnx` from the same
+Hugging Face repository. SHA-256:
+`6c0201e3403745f39a9aa5273c50ed084cf6c4af5a71a4654c30252cf19bf0a5`.
+Do not substitute the Lite model. The model's license and final sizing above still apply.
+
+```powershell
+uv pip install --python .venv/Scripts/python.exe -r requirements-dml.txt
+# Only in an empty staging/ or one belonging to this exact GPU pipeline:
+.\.venv\Scripts\python.exe -B -m acv_tools.acv_upscale original-data/DATA/039.acv staging --model tools/ultrasharp/4x-UltraSharpV2_fp32_op17.onnx --workers 1
+```
+
+The local four-texture RX 9070 XT preview matched CPU RGB within 1/255 per channel;
+alpha was identical and profiling confirmed GPU execution. This is a small pilot,
+not full texture or live-game validation. Some shape operations run on CPU; a missing
+DirectML provider or whole-session CPU fallback is an error. A startup profile also
+rejects sessions with no GPU computation, even if DirectML is registered. One persistent
+session uses FP32 and the same tiled inference, alpha, DDS and renderer-metadata policies.
+The GPU backend/package/model get a separate fingerprint/cache; CPU receipts cannot
+resume as GPU output. Stop and inspect any old batch before preserving its outputs
+aside and restarting. Keep the game closed during GPU processing.
 
 ### Legacy Real-ESRGAN path
 

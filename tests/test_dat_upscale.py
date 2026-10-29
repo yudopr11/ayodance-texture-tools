@@ -6,7 +6,8 @@ import tempfile
 import unittest
 import zlib
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from acv_tools.acv_unpack import decode_entry, read_index
 from acv_tools.acv_upscale import (
@@ -16,7 +17,7 @@ from acv_tools.acv_upscale import (
     process,
     resize_dds,
 )
-from acv_tools.dat_upscale import tiled_rgb
+from acv_tools.dat_upscale import load_onnx, tiled_rgb, upscale_image
 from tests.test_acv_upscale import tiny_dds
 
 
@@ -41,6 +42,97 @@ class DatTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'not 4x'):
             tiled_rgb(image, lambda tile: tile)
 
+    def test_onnx_session_requires_gpu_and_is_reused(self):
+        runtime, session = MagicMock(), MagicMock()
+        runtime.get_available_providers.return_value = ['DmlExecutionProvider', 'CPUExecutionProvider']
+        events = [{'args': {'provider': 'DmlExecutionProvider', 'op_name': 'Conv'}}]
+
+        def create_session(*args, **kwargs):
+            profile = Path(kwargs['sess_options'].profile_file_prefix + '.json')
+            profile.write_text(json.dumps(events))
+            session.end_profiling.return_value = str(profile)
+            return session
+
+        runtime.InferenceSession.side_effect = create_session
+        session.get_providers.return_value = ['DmlExecutionProvider', 'CPUExecutionProvider']
+        session.get_inputs.return_value = [SimpleNamespace(name='input', type='tensor(float)', shape=[1, 3, 'H', 'W'])]
+        session.get_outputs.return_value = [object()]
+        load_onnx.cache_clear()
+        try:
+            with patch.dict('sys.modules', {'onnxruntime': runtime}):
+                self.assertIs(load_onnx('model.onnx'), session)
+                self.assertIs(load_onnx('model.onnx'), session)
+                runtime.InferenceSession.assert_called_once()
+                session.disable_fallback.assert_called_once()
+                self.assertEqual(runtime.InferenceSession.call_args.kwargs['providers'],
+                                 [('DmlExecutionProvider', {'device_id': '0'})])
+                options = runtime.SessionOptions.return_value
+                self.assertFalse(options.enable_mem_pattern)
+                self.assertEqual(options.execution_mode, runtime.ExecutionMode.ORT_SEQUENTIAL)
+                runtime.get_available_providers.return_value = ['CPUExecutionProvider']
+                with self.assertRaisesRegex(ValueError, 'requires onnxruntime-directml'):
+                    load_onnx('missing-gpu.onnx')
+                runtime.get_available_providers.return_value = ['DmlExecutionProvider']
+                session.get_providers.return_value = ['CPUExecutionProvider']
+                with self.assertRaisesRegex(ValueError, 'fell back to CPU'):
+                    load_onnx('fallback.onnx')
+                session.get_providers.return_value = ['DmlExecutionProvider', 'CPUExecutionProvider']
+                events[:] = [{'args': {'provider': 'CPUExecutionProvider', 'op_name': 'Conv'}},
+                             {'args': {'provider': 'DmlExecutionProvider', 'op_name': 'MemcpyFromHost'}}]
+                with self.assertRaisesRegex(ValueError, 'no profiled DirectML computation'):
+                    load_onnx('registered-but-unused.onnx')
+        finally:
+            load_onnx.cache_clear()
+
+    def test_onnx_pixels_padding_shapes_and_failure_checks(self):
+        import numpy as np
+        from PIL import Image
+
+        session = MagicMock()
+        session.get_inputs.return_value = [SimpleNamespace(name='input')]
+
+        def infer(outputs, feed):
+            tensor = feed['input']
+            self.assertEqual(tensor.dtype, np.float32)
+            self.assertTrue(tensor.flags.c_contiguous)
+            self.assertGreaterEqual(min(tensor.shape[2:]), 16)
+            if image.width <= 128 and image.height <= 128:
+                def indices(length):
+                    result = list(range(length))
+                    result += list(range(length - 2, -1, -1))[:max(0, 16 - length)]
+                    result += [result[-1]] * max(0, 16 - len(result))
+                    return result
+
+                expected = np.asarray(image.convert('RGB'), dtype=np.float32)
+                expected = expected[indices(image.height)][:, indices(image.width)] / np.float32(255)
+                np.testing.assert_array_equal(tensor[0].transpose(1, 2, 0), expected)
+            return [tensor.repeat(4, axis=2).repeat(4, axis=3)]
+
+        session.run.side_effect = infer
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch('acv_tools.dat_upscale.load_onnx', return_value=session):
+            root = Path(temporary)
+            source, destination = root / 'input.png', root / 'output.png'
+            for size in ((1, 1), (1, 7), (7, 1), (3, 7), (31, 17), (301, 177)):
+                with self.subTest(size=size):
+                    image = Image.new('RGBA', size)
+                    image.putdata([((x * 17 + y * 13) % 256, x % 256, y % 256, 77)
+                                   for y in range(size[1]) for x in range(size[0])])
+                    image.save(source)
+                    upscale_image(source, destination, root / 'model.onnx')
+                    with Image.open(destination) as result:
+                        expected = image.convert('RGB').resize((size[0] * 4, size[1] * 4),
+                                                               Image.Resampling.NEAREST)
+                        self.assertEqual(result.tobytes(), expected.tobytes())
+            Image.new('RGB', (3, 7)).save(source)
+            session.run.side_effect = None
+            session.run.return_value = [np.full((1, 3, 64, 64), np.nan, dtype=np.float32)]
+            with self.assertRaisesRegex(ValueError, 'non-finite'):
+                upscale_image(source, destination, root / 'model.onnx')
+            session.run.return_value = [np.zeros((1, 3, 32, 32), dtype=np.float32)]
+            with self.assertRaisesRegex(ValueError, 'not 4x'):
+                upscale_image(source, destination, root / 'model.onnx')
+
     def test_fingerprint_tracks_model_converter_and_packages(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -49,6 +141,9 @@ class DatTests(unittest.TestCase):
             model.write_bytes(b'model')
             with patch('acv_tools.acv_upscale.version', return_value='test'):
                 old = pipeline_identity(converter, model=model)
+                onnx = root / 'model.onnx'
+                onnx.write_bytes(model.read_bytes())
+                self.assertNotEqual(old, pipeline_identity(converter, model=onnx))
                 model.write_bytes(b'updated model')
                 current = pipeline_identity(converter, model=model)
                 self.assertNotEqual(old, current)
@@ -115,6 +210,22 @@ class DatTests(unittest.TestCase):
             self.assertEqual(json.loads((staging / '009.acv.json').read_text()), result)
             with self.assertRaisesRegex(ValueError, 'cannot be safely resumed'):
                 process(source, staging, converter, pipeline='other', model=model)
+
+    def test_gpu_receipt_records_directml_device(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            raw = tiny_dds()
+            payload = zlib.compress(raw)
+            source, staging = root / '009.acv', root / 'stage'
+            source.write_bytes(struct.pack('<I', 1) + b'gui/text.dds'.ljust(160, b'\0') +
+                               struct.pack('<4I', 7, len(payload), len(raw), 0) + payload)
+            staging.mkdir()
+            with patch('acv_tools.acv_upscale.resize_dds', return_value=False):
+                result = process(source, staging, root / 'texconv', pipeline='gpu-test',
+                                 model=root / 'model.onnx')
+            self.assertEqual(result['device'], 'directml:0')
+            self.assertEqual(result['status'], 'verified')
+            self.assertEqual(json.loads((staging / '009.acv.json').read_text()), result)
 
     def test_model_failure_does_not_publish_archive(self):
         with tempfile.TemporaryDirectory() as temporary:

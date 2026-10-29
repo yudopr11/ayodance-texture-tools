@@ -1,0 +1,4 @@
+# Optional Windows GPU backend for trusted 4x RGB DAT ONNX exports (UltraSharpV2).
+-r requirements-upscale.txt
+numpy==1.26.4
+onnxruntime-directml==1.24.4

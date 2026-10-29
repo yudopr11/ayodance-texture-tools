@@ -52,8 +52,9 @@ Historical research commands and paths are provenance, not current instructions.
   the renderer contract—not archive filenames or file counts alone.
 - Current comparison preset: UltraSharpV2 DAT2 RGB enhancement on all textures,
   followed by 2× final dimensions, capped at 2048; resize original alpha separately.
-  Use `staging/` for current outputs. DAT CPU reference is supported; the local
-  PyTorch/DirectML experiment produced artifacts and is not a validated backend.
+  Use `staging/` for current outputs. DAT state dictionaries use CPU; trusted FP32
+  ONNX exports use DirectML GPU 0 (small local pilot validated, not exhaustive).
+  The PyTorch/DirectML experiment produced artifacts; do not use that backend.
   Preserve DDS pixel formats and mipmap policy. Never enhance an enhanced source.
 - Enlarged DDS files need native-layout metadata and the compatible shim to avoid
   oversized UI. Keep cached images untagged; add metadata when staging replacements.

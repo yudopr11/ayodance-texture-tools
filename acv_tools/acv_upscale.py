@@ -50,9 +50,12 @@ def pipeline_identity(texconv, esrgan=None, model=None):
         from . import dat_upscale as backend
 
         files = [texconv, model, Path(__file__), Path(backend.__file__)]
-        packages = ['torch', 'torchvision', 'spandrel', 'numpy', 'Pillow']
+        onnx = model.suffix.lower() == '.onnx'
+        packages = (['onnxruntime-directml', 'numpy', 'Pillow'] if onnx else
+                    ['torch', 'torchvision', 'spandrel', 'numpy', 'Pillow'])
         identity = {'files': [digest(p) for p in files],
-                    'packages': {p: version(p) for p in packages}, 'device': 'cpu',
+                    'packages': {p: version(p) for p in packages},
+                    'device': 'directml:0' if onnx else 'cpu',
                     'tile': backend.TILE, 'border': backend.BORDER, 'precision': 'fp32'}
         fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         return 'dat4x-all-2x-cap2048-v1-' + fingerprint[:16]
@@ -269,7 +272,7 @@ def process(source, staging, texconv, esrgan=None, pipeline=None, model=None):
               'source_sha256': source_hash, 'pipeline': pipeline, 'renderer': RENDERER}
     if model:
         result['model'] = model.name
-        result['device'] = 'cpu'
+        result['device'] = 'directml:0' if model.suffix.lower() == '.onnx' else 'cpu'
     with tempfile.TemporaryDirectory(prefix=source.stem + '-', dir=staging) as temporary:
         work = Path(temporary)
         replacements = work / 'replacements'
@@ -331,7 +334,8 @@ def main():
     parser.add_argument('--workers', type=int, default=1)
     backend = parser.add_mutually_exclusive_group()
     backend.add_argument('--esrgan', type=Path, help='NCNN Vulkan executable; enables Real-ESRGAN')
-    backend.add_argument('--model', type=Path, help='4x RGB DAT model, e.g. UltraSharpV2; all textures, CPU')
+    backend.add_argument('--model', type=Path,
+                         help='4x RGB DAT: .safetensors/.pth on CPU, .onnx on DirectML GPU 0; all textures')
     args = parser.parse_args()
     source, staging, texconv = args.source.resolve(), args.staging.resolve(), args.texconv.resolve(strict=True)
     esrgan = args.esrgan.resolve(strict=True) if args.esrgan else None
