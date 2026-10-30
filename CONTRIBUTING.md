@@ -106,6 +106,8 @@ destructive cleanup.
    binaries, native build outputs, credentials or private screenshots. Do not
    force-add ignored assets. Git is not their backup.
 
-Third-party models/tools have their own licenses; the UltraSharpV2 license is not
-an automatic license for this repository's source or the game's assets. Public
-visibility alone does not grant permission to redistribute those assets.
+Contributions must be yours to license under this repository's [MIT License](LICENSE),
+or have clearly identified compatible permissions and retained notices. Do not
+submit proprietary code/assets or assume recovered game material can be relicensed.
+Third-party models/tools keep their own licenses. MIT does not authorize game
+modification or asset redistribution; see the [policy and rights summary](docs/modding-policy.md).

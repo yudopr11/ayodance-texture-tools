@@ -14,7 +14,9 @@ models and third-party executables are **not included**.
 - Enlarged textures can break UI layout without the compatible
   [experimental renderer shim](renderer_patch/README.md). It supports a specific
   client build, not every AyoDance version. Offline verification is not proof of
-  live-game compatibility. Check the game's modification policy before use.
+  live-game compatibility. **AyoDance rule 6 prohibits game modifications and lists
+  a permanent block.** These tools are not approved for the live service; see the
+  [official rules and license limits](docs/modding-policy.md).
 
 ## 1. Set up
 
@@ -86,6 +88,31 @@ files; failures retain them. Never run two jobs against the same staging/cache,
 change the pipeline, clean outputs or install files while a batch is running.
 The CLI writes `batch-report.json`; verify its results, not just the file count.
 
+## Using enlarged textures in game (experimental)
+
+**Technical requirement, not permission to mod:** enlarged, tagged textures need
+this repo's compatible `renderer_patch` shim to preserve native UI size and hit
+areas. Replacing ACV files alone is not enough. Obtain written publisher permission
+before deployment; the official modification ban above still applies.
+
+For a permitted test on the supported client build:
+
+1. Follow the [renderer build and graphics checks](renderer_patch/README.md).
+   The build produces **`renderer_patch/build/d3d9.dll`**; no prebuilt DLL is
+   included. Do not build or install while an upscale batch is active.
+2. Close the game and back up the working archives and any existing DLL outside
+   the game folder. Copy the built **`d3d9.dll` beside `Audition.exe`**, not into
+   `DATA/`. If an older copy of **this same shim** is there, replace it only after
+   backing it up. Do not blindly overwrite an unrelated wrapper or vendor DLL;
+   stop if you cannot identify the existing file. Never replace a Windows system
+   DLL, `d3dx9_43.dll`, or the client EXE.
+3. Manually copy only the verified, tagged test archives from `staging/` into the
+   test copy's `DATA/`, backing up each corresponding archive before replacing it.
+   Do not copy caches, receipts or texture manifests into the game.
+4. Check `renderer-patch.log` beside the DLL. `ACTIVE_V64` confirms hook
+   installation, not full compatibility; `INACTIVE` means stop and roll back.
+   Follow the renderer guide's failure handling, visual checks and rollback steps.
+
 ## More information
 
 - [Contributing and developer setup](CONTRIBUTING.md)
@@ -95,3 +122,10 @@ The CLI writes `batch-report.json`; verify its results, not just the file count.
 
 Local game assets, tools and generated outputs are Git-ignored, not backed up by
 Git. Keep separate backups and do not upload proprietary assets or credentials.
+
+## License
+
+Author-owned code and documentation use the [MIT License](LICENSE). Game assets,
+trademarks, external tools and models are not covered by that grant and retain
+their own rights and terms. MIT does not authorize game modification or asset
+redistribution. See [modding policy and third-party rights](docs/modding-policy.md).
