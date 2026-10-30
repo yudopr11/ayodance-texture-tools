@@ -140,6 +140,12 @@ bytes and untouched stored payloads. Duplicate non-DDS records remain separate,
 opaque entries in their original order; duplicate DDS replacement paths are rejected.
 Unused RGB bit-count/mask fields in DXT headers retain their native values even
 when texconv clears them; the FourCC and format flags must still match.
+Some original `.dds` entries actually contain Photoshop PSD images. Valid PSDs
+are decoded for identification but retained with their original name and stored
+payload bytes; they are not converted, tagged or AI-upscaled. Receipts and texture
+manifests list these separately in `preserved_images` with their paths and source
+hashes, outside DDS texture counts. Malformed PSDs, invalid DDS headers and unknown
+image payloads still fail; a filename alone never establishes an image format.
 Cache entries are untagged; receipts include
 tool/model/code/backend fingerprints. Keep one current output folder, `staging/`;
 never mix models into it or clean it while a job is running. Tagged sources are

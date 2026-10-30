@@ -88,6 +88,10 @@ name/path, decoded source/output/cache SHA-256 hashes, dimensions, DDS pixel for
 mips, model/backend and original pipeline fingerprint. Backfilling checks both
 archive hashes against receipts, renderer tags and unchanged non-texture payloads.
 It refuses active batch locks and existing manifest directories; preserve old logs.
+Valid Photoshop PSD images mislabeled `.dds` remain byte-identical and are listed
+separately in `preserved_images` in receipts and manifests, not DDS counts. They
+are not AI-upscaled or converted during staging or incremental updates. Unknown
+or malformed image payloads still fail explicitly.
 
 For a game update, first take a **new untouched input snapshot**, keeping the old
 originals and enhanced archives intact. Stage one changed archive into a **new**

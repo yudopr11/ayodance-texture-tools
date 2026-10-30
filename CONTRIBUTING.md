@@ -39,7 +39,7 @@ These commands use synthetic data and mocks, not a real converter or GPU workloa
 
 ```powershell
 .\.venv\Scripts\python.exe -B -m unittest tests.test_acv_unpack tests.test_acv_pack tests.test_stage_renderer_pilot tests.test_cli -v
-.\.venv\Scripts\python.exe -B -m unittest tests.test_dat_upscale tests.test_texture_manifest tests.test_staging_metadata -v
+.\.venv\Scripts\python.exe -B -m unittest tests.test_dat_upscale tests.test_texture_manifest tests.test_staging_metadata tests.test_preserved_psd -v
 ```
 
 For relevant upscaler changes, also run the synthetic/mocked methods in

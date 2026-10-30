@@ -13,6 +13,7 @@ from .acv_upscale import (
     dds_format,
     dds_info,
     digest,
+    is_preserved_psd,
     pipeline_identity,
     process,
     receipt_path,
@@ -71,6 +72,7 @@ def capture(source, staged):
             or receipt.get('output_sha256') != after_hash):
         raise ValueError(f'Unverified or changed archive: {source.name}')
     textures = []
+    preserved = []
     seen = set()
     with source.open('rb') as original, output.open('rb') as rebuilt:
         before, after = read_index(original), read_index(rebuilt)
@@ -91,6 +93,14 @@ def capture(source, staged):
                 raise ValueError('Duplicate DDS archive paths')
             seen.add(key)
             native, enhanced = decode_entry(original, old), decode_entry(rebuilt, new)
+            if is_preserved_psd(native):
+                original.seek(old[4])
+                rebuilt.seek(new[4])
+                if old[2:4] != new[2:4] or original.read(old[2]) != rebuilt.read(new[2]):
+                    raise ValueError(f'Preserved PSD stored payload changed: {old[0]!r}')
+                preserved.append({'path': old[0], 'format': 'PSD',
+                                  'source_sha256': sha256(native)})
+                continue
             plain = untag(native, enhanced)
             native_hash = sha256(native)
             textures.append({'archive': source.name, 'entry_index': index, 'texture': old[0],
@@ -103,11 +113,16 @@ def capture(source, staged):
         raise ValueError('Archive changed during inventory')
     if len(textures) != receipt.get('textures'):
         raise ValueError('Texture count differs from verified receipt')
-    return {'schema': 1, 'archive': source.name, 'source': str(source), 'output': str(output),
+    if preserved != receipt.get('preserved_images', []):
+        raise ValueError('Preserved images differ from verified receipt')
+    record = {'schema': 1, 'archive': source.name, 'source': str(source), 'output': str(output),
             'source_sha256': before_hash, 'output_sha256': after_hash,
             'pipeline': receipt['pipeline'], 'renderer': RENDERER,
             'model': receipt.get('model'), 'device': receipt.get('device'),
             'status': 'verified', 'textures': textures}
+    if preserved:
+        record['preserved_images'] = preserved
+    return record
 
 
 def build(source, staged, destination):
@@ -211,6 +226,8 @@ def stage_update(source, destination, manifest, texconv, model, reuse_pipelines=
                 raise ValueError('Duplicate DDS archive paths')
             seen.add(key)
             native = decode_entry(stream, entry)
+            if is_preserved_psd(native):
+                continue
             width, height, _ = dds_info(native)
             if native[32:40] == MAGIC:
                 raise ValueError('Use untouched original textures')

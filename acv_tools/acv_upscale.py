@@ -2,6 +2,7 @@
 
 import argparse
 import hashlib
+import io
 import json
 import shutil
 import struct
@@ -13,7 +14,7 @@ from importlib.metadata import version
 from pathlib import Path
 
 from .acv_pack import pack_archive
-from .acv_unpack import decode_entry, read_index, safe_relative_path
+from .acv_unpack import MAX_RAW, decode_entry, read_index, safe_relative_path
 
 
 def digest(path):
@@ -31,6 +32,19 @@ def dds_info(raw):
     if raw[84:88] == b'DX10' or struct.unpack_from('<I', raw, 112)[0]:
         raise ValueError('DX10, cubemap or volume DDS requires explicit handling')
     return width, height, raw[80:108]
+
+
+def is_preserved_psd(raw):
+    """Recognize valid mislabeled PSDs; retain them instead of changing their format."""
+    if raw[:4] != b'8BPS':
+        return False
+    from PIL import Image
+
+    with Image.open(io.BytesIO(raw)) as image:
+        if image.format != 'PSD' or image.width * image.height * 4 > MAX_RAW:
+            raise ValueError('Unsupported or oversized PSD payload')
+        image.load()
+    return True
 
 
 def target_size(width, height):
@@ -320,10 +334,15 @@ def process(source, staging, texconv, esrgan=None, pipeline=None, model=None):
                 if path.suffix.lower() != '.dds':
                     continue
                 raw = decode_entry(stream, entry)
-                result['textures'] += 1
                 incoming = work / 'input.dds'
                 converted_dir = work / 'converted'
                 try:
+                    if is_preserved_psd(raw):
+                        result.setdefault('preserved_images', []).append({
+                            'path': entry[0], 'format': 'PSD',
+                            'source_sha256': hashlib.sha256(raw).hexdigest()})
+                        continue
+                    result['textures'] += 1
                     resized = resize_dds(raw, incoming, converted_dir, texconv, esrgan,
                                          staging / '.texture-cache' / pipeline, model)
                 except Exception as error:
