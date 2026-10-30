@@ -7,7 +7,7 @@ from pathlib import Path
 
 from acv_tools.acv_pack import pack_archive
 from acv_tools.acv_unpack import decode_entry, read_index
-from acv_tools.acv_upscale import MAGIC, RENDERER, digest, tag_dds
+from acv_tools.acv_upscale import MAGIC, RENDERER, digest, receipt_path, tag_dds
 from acv_tools.stage_renderer_pilot import stage
 
 
@@ -89,7 +89,7 @@ class RendererPilotTests(unittest.TestCase):
             self.assertEqual(result['renderer'], RENDERER)
             self.assertEqual(result['tagged_textures'], 1)
             self.assertEqual(result['output_sha256'], digest(output))
-            self.assertEqual(json.loads(output.with_suffix('.acv.json').read_text()), result)
+            self.assertEqual(json.loads((output.parent / '.metadata/009.acv.json').read_text()), result)
             self.assertEqual(digest(original), receipt['source_sha256'])
             self.assertEqual(digest(enhanced), receipt['output_sha256'])
             with output.open('rb') as stream:
@@ -98,8 +98,13 @@ class RendererPilotTests(unittest.TestCase):
                 self.assertEqual(decode_entry(stream, entries[1]), b'opaque')
             with self.assertRaises(FileExistsError):
                 stage(original, enhanced, output)
+            # The same input is readable after its receipt moves to the new layout.
+            moved = enhanced.parent / '.metadata/009.acv.json'
+            moved.parent.mkdir()
+            enhanced.with_suffix('.acv.json').rename(moved)
+            self.assertEqual(stage(original, enhanced, root / 'pilot-new/009.acv')['tagged_textures'], 1)
             receipt['source_sha256'] = 'incorrect'
-            enhanced.with_suffix('.acv.json').write_text(json.dumps(receipt))
+            receipt_path(enhanced).write_text(json.dumps(receipt))
             with self.assertRaisesRegex(ValueError, 'hashes do not match'):
                 stage(original, enhanced, root / 'rejected/009.acv')
             self.assertFalse((root / 'rejected/009.acv').exists())

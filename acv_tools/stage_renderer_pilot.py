@@ -6,16 +6,16 @@ from pathlib import Path
 
 from .acv_pack import pack_archive
 from .acv_unpack import decode_entry, read_index, safe_relative_path
-from .acv_upscale import RENDERER, digest, tag_dds, verify_archive
+from .acv_upscale import RENDERER, digest, receipt_path, tag_dds, verify_archive
 
 
 def stage(original, enhanced, output):
     if output.resolve().parent in (original.resolve().parent, enhanced.resolve().parent):
         raise ValueError('Pilot output must use a separate directory')
-    if output.exists() or output.with_suffix('.acv.json').exists():
+    if output.exists() or receipt_path(output).exists():
         raise FileExistsError('Refusing to overwrite existing pilot output or receipt')
     try:
-        receipt = json.loads(enhanced.with_suffix('.acv.json').read_text())
+        receipt = json.loads(receipt_path(enhanced).read_text())
     except (OSError, ValueError) as error:
         raise ValueError(f'Cannot read verified AI receipt: {error}') from error
     if not isinstance(receipt, dict):
@@ -52,7 +52,9 @@ def stage(original, enhanced, output):
     result.update(status='experimental-verified-repack-not-game-tested', tagged_textures=tagged,
                   original_sha256=original_hash, enhanced_sha256=enhanced_hash,
                   output_sha256=digest(output), renderer=RENDERER)
-    output.with_suffix('.acv.json').write_text(json.dumps(result, indent=2))
+    receipt = receipt_path(output)
+    receipt.parent.mkdir(exist_ok=True)
+    receipt.write_text(json.dumps(result, indent=2))
     return result
 
 

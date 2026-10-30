@@ -18,6 +18,7 @@ from acv_tools.acv_upscale import (
     digest,
     pipeline_identity,
     process,
+    receipt_path,
     resize_dds,
     restore_rgb24,
     target_size,
@@ -193,7 +194,7 @@ class UpscaleTests(unittest.TestCase):
                                     zip(converted[128:131], (128, 64, 32), strict=True)))
             self.assertEqual(source.read_bytes(), snapshot)
             self.assertEqual(process(source, staging, Path('tools/texconv.exe').resolve()), result)
-            receipt = staging / (source.name + '.json')
+            receipt = receipt_path(staging / source.name)
             # Upgrade a verified legacy repack from its old image cache, with no tool/AI rerun.
             legacy = converted[:32] + bytes(44) + converted[76:]
             replacements = root / 'legacy-textures'

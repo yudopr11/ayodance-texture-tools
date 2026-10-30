@@ -9,7 +9,7 @@ from pathlib import Path
 class PackageCliTests(unittest.TestCase):
     def test_help_from_project_root(self):
         root = Path(__file__).resolve().parents[1]
-        for module in ("acv_unpack", "acv_pack", "acv_upscale", "stage_renderer_pilot"):
+        for module in ("acv_unpack", "acv_pack", "acv_upscale", "stage_renderer_pilot", "texture_manifest"):
             with self.subTest(module=module):
                 result = subprocess.run(
                     [sys.executable, "-B", "-m", f"acv_tools.{module}", "--help"],

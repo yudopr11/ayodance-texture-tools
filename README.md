@@ -1,206 +1,97 @@
 # AyoDance ACV texture tools
 
-Unpack, edit, upscale and repack AyoDance texture archives without modifying the
-original input files. Supports plain ACVs and tagged formats **1, 2, 3, 5 and 6**.
+Extract, edit, upscale and repack AyoDance textures. Supports plain ACV archives
+and tagged formats **1, 2, 3, 5 and 6**.
 
-**Local batch status:** inspect `staging/job.json`, progress files and live process
-command lines. Git does not track running-job state; no batch starts automatically.
+These are command-line tools, not a ready-to-install texture pack. Game files,
+models and third-party executables are **not included**.
 
-## Project layout
+## Before you start
 
-```text
-acv_tools/         Production unpacker, packer, upscaler and pilot stager
-research/          Offline loader probes and Ghidra scripts
-renderer_patch/    Experimental v64 renderer source, build and rollback guide
-tests/             Regression tests and package CLI smoke tests
-docs/              Format guide and historical research
-```
+- Use your own **untouched backup** of the game's archives. Keep it separate from
+  the installed game; already-enhanced files are not suitable upscale inputs.
+- Start with one archive. Outputs are staged separately; nothing installs itself.
+- Enlarged textures can break UI layout without the compatible
+  [experimental renderer shim](renderer_patch/README.md). It supports a specific
+  client build, not every AyoDance version. Offline verification is not proof of
+  live-game compatibility. Check the game's modification policy before use.
 
-The following are local, Git-ignored assets—not included with the source:
+## 1. Set up
 
-- `original-data/DATA/`: untouched backup archives; the upscale source.
-- `staging/`: current enhanced archives, receipts, `.texture-cache/` and `preview/`.
-- Historical staging folders, if retained locally, are not current outputs.
-- `tools/`: downloaded converters, ESRGAN models and the local compiler.
-- `diagnostics/`: offline evidence and examples; reports are grouped under
-  `reports/`, `decompilation/` and `audit/`. See the [diagnostics guide](docs/diagnostics.md).
-- `ghidra_12.2_PUBLIC/`, `images/`, `.venv/`: local analysis tools, screenshots and environment.
-
-Git does **not** back up these ignored assets. Keep a separate backup before cleanup
-or installing anything into the game. The game directory is outside this project.
-
-## Setup and basic use
-
-Examples use PowerShell from the project root. Replace the example path with your
-own checkout location. Python **3.11+** is recommended for all commands; the
-upscaler requires it for `hashlib.file_digest`.
+Examples use **Windows PowerShell**, Python **3.11 or 3.12**, and
+[uv](https://docs.astral.sh/uv/getting-started/installation/).
+Download or clone this repository, then run from its root:
 
 ```powershell
-cd C:\path\to\acv-unpacker-upscaler
-uv venv
+uv venv --python 3.12
 uv pip install --python .venv/Scripts/python.exe -r requirements-acv.txt
-
-# Extract into a NEW folder. Use your own untouched archive backup.
-.\.venv\Scripts\python.exe -B -m acv_tools.acv_unpack original-data/DATA/262.acv --textures-only --output texture-work
-
-# After editing DDS files, build a separate archive, never over the source.
-mkdir staging
-.\.venv\Scripts\python.exe -B -m acv_tools.acv_pack original-data/DATA/262.acv texture-work/262 staging/262.acv
-.\.venv\Scripts\python.exe -B -m acv_tools.acv_unpack staging/262.acv --textures-only
-
-# Non-GPU container, metadata and CLI tests.
-.\.venv\Scripts\python.exe -B -m unittest tests.test_acv_unpack tests.test_acv_pack tests.test_stage_renderer_pilot tests.test_cli -v
 ```
 
-Use `python -m acv_tools.<module>` from the project root, not the old root-level
-script paths. See [the format and unpacking guide](docs/acv-unpacking.md).
+Put your original archive backups in `original-data/DATA/`. The commands below
+use example archive numbers; substitute files from your own installation.
+No game process or reverse-engineering tools are needed to extract or repack.
 
-## AI upscaling for a 1440p / “2K” display
-
-The current comparison preset uses **UltraSharpV2 (DAT2) for every DDS texture**,
-including UI, HUD, text and fonts. The model's 4× RGB result is downsampled with
-Lanczos to **2× source dimensions**, capped at **2048 pixels on the longest side**.
-Alpha comes from the original, resized separately with Lanczos. Textures at or
-above the cap remain unchanged. This does not turn every texture into 2048×2048.
-Doubling both dimensions uses roughly four times the texture memory.
-
-### UltraSharpV2 comparison (CPU reference)
-
-Install the optional backend into this project's `.venv` (Python **3.11 or 3.12**).
-Obtain `4x-UltraSharpV2.safetensors` from the author's
-[Hugging Face repository](https://huggingface.co/Kim2091/UltraSharpV2), linked by
-[OpenModelDB](https://openmodeldb.info/models/4x-UltraSharpV2), and place it under
-`tools/ultrasharp/`. Its license is **CC-BY-NC-SA-4.0**, not PBRify's CC0; check the
-license before distributing derivatives or using it commercially. The published
-safetensors SHA-256 is `2b5db674aa8f3864a696dccd1d07d7cc0500fbf220f35044cd30eee9a7f971a7`.
-Models and converters are not included in Git. Use only trusted state dictionaries.
+## 2. Extract and edit textures
 
 ```powershell
-uv pip install --python .venv/Scripts/python.exe -r requirements-dat.txt
-# CPU reference: bound thread overhead, then process one small mixed archive.
-$env:OMP_NUM_THREADS = '8'
-$env:MKL_NUM_THREADS = '8'
-.\.venv\Scripts\python.exe -B -m acv_tools.acv_upscale original-data/DATA/039.acv staging --model tools/ultrasharp/4x-UltraSharpV2.safetensors --workers 1
+.\.venv\Scripts\python.exe -B -m acv_tools.acv_unpack original-data/DATA/262.acv --textures-only --output texture-work
 ```
 
-- `.safetensors` and `.pth` use **CPU FP32**. The experimental PyTorch/DirectML
-  DAT path produced visible artifacts and is not used. For the separately tested
-  ONNX/DirectML GPU path, see below. A full CPU batch is much slower; inspect a pilot
-  before deciding whether to run it.
-- One persistent worker loads the model once. Inference uses 128-pixel input tiles
-  with 32-pixel context, cropped before stitching. DAT has global attention; tiled
-  inference is approximate and can show seams or color shifts.
-- `staging/preview/` holds local comparison PNGs, when generated. The comparison
-  shows original, Lanczos and actual repacked UltraSharp DDS pixels at equal display
-  size. AI may sharpen lettering incorrectly; very small text cannot be recovered
-  reliably, and original-alpha preservation can retain a soft outline.
-- Fingerprints include the model, converter, implementation, package versions,
-  precision and tiling policy. Cached DDS images remain untagged. A changed pipeline
-  refuses mismatched receipts; archive/move the old `staging/` safely before reusing
-  that one output location for a different model. Never clean an active batch.
-- `--model` and `--esrgan` are mutually exclusive. Without either, the legacy cubic
-  converter path remains available; it does not use UltraSharp.
+Edit the DDS files under `texture-work/262/`, keeping their relative paths.
+Existing extraction folders are refused. See the [format guide](docs/acv-unpacking.md)
+for supported formats and limits.
 
-### UltraSharpV2 GPU (ONNX/DirectML)
+## 3. Repack into a separate output
 
-On Windows, a trusted `.onnx` supplied to `--model` selects **DirectML GPU adapter
-0**, not PyTorch. Obtain the author's `4x-UltraSharpV2_fp32_op17.onnx` from the same
-Hugging Face repository. SHA-256:
-`6c0201e3403745f39a9aa5273c50ed084cf6c4af5a71a4654c30252cf19bf0a5`.
-Do not substitute the Lite model. The model's license and final sizing above still apply.
+```powershell
+New-Item -ItemType Directory -Force staging | Out-Null
+.\.venv\Scripts\python.exe -B -m acv_tools.acv_pack original-data/DATA/262.acv texture-work/262 staging/262.acv
+# Check decoding without installing or extracting the result:
+.\.venv\Scripts\python.exe -B -m acv_tools.acv_unpack staging/262.acv --textures-only
+```
+
+Only provided files are replaced; other stored payloads are preserved byte-for-byte.
+Existing output archives are refused. Keep your backups and inspect staged results
+before considering installation.
+
+## Optional: AI upscaling
+
+The UltraSharpV2 preset enhances all DDS textures, then produces **2× dimensions**,
+capped at **2048 pixels on the longest side**. Original alpha, DDS pixel formats
+and mipmap policy are preserved. AI can distort small text, and tiled inference
+can introduce seams. Doubling both dimensions uses roughly 4× the texture memory.
+
+For Windows GPU processing:
+
+1. Get `texconv.exe` from [Microsoft DirectXTex](https://github.com/microsoft/DirectXTex/releases)
+   and place it in `tools/`.
+2. Get the author's **`4x-UltraSharpV2_fp32_op17.onnx`** from
+   [Kim2091/UltraSharpV2](https://huggingface.co/Kim2091/UltraSharpV2) and place it
+   in `tools/ultrasharp/`. Do not substitute the Lite model.
+3. Close the game, install the optional backend, and try one archive:
 
 ```powershell
 uv pip install --python .venv/Scripts/python.exe -r requirements-dml.txt
-# Only in an empty staging/ or one belonging to this exact GPU pipeline:
 .\.venv\Scripts\python.exe -B -m acv_tools.acv_upscale original-data/DATA/039.acv staging --model tools/ultrasharp/4x-UltraSharpV2_fp32_op17.onnx --workers 1
 ```
 
-The local four-texture RX 9070 XT preview matched CPU RGB within 1/255 per channel;
-alpha was identical and profiling confirmed GPU execution. This is a small pilot,
-not full texture or live-game validation. Some shape operations run on CPU; a missing
-DirectML provider or whole-session CPU fallback is an error. A startup profile also
-rejects sessions with no GPU computation, even if DirectML is registered. One persistent
-session uses FP32 and the same tiled inference, alpha, DDS and renderer-metadata policies.
-The GPU backend/package/model get a separate fingerprint/cache; CPU receipts cannot
-resume as GPU output. Stop and inspect any old batch before preserving its outputs
-aside and restarting. Keep the game closed during GPU processing.
+This uses **ONNX/DirectML GPU adapter 0**. UltraSharpV2 has a **CC-BY-NC-SA-4.0**
+license; review its terms before using or sharing outputs. Use only trusted model
+files. See the [upscaling guide](docs/upscaling.md) for checksums, CPU support,
+legacy ESRGAN, resume behavior and reusing textures after game updates.
 
-### Legacy Real-ESRGAN path
+Keep `staging/.metadata/` receipts, `.texture-cache/` and any `texture-manifest/`:
+resume and future updates depend on them. Successful runs remove their progress
+files; failures retain them. Never run two jobs against the same staging/cache,
+change the pipeline, clean outputs or install files while a batch is running.
+The CLI writes `batch-report.json`; verify its results, not just the file count.
 
-The old all-AI workflow remains available, using **Real-ESRGAN x4plus** for 4× RGB
-followed by 2×/cap2048 final sizing. Do not reuse its cache as UltraSharp output.
+## More information
 
-**Hardware example:** the RX 9070 XT is the GPU used on **my own machine**, not a
-requirement for yours. The NCNN Vulkan executable uses GPU index 0 in this pipeline;
-your GPU, available memory and performance may differ. A compatible Vulkan GPU and
-an appropriate Real-ESRGAN NCNN executable are needed for this AI path.
+- [Contributing and developer setup](CONTRIBUTING.md)
+- [Archive format, validation and troubleshooting](docs/acv-unpacking.md)
+- [Upscaling and incremental updates](docs/upscaling.md)
+- [Experimental renderer: build, testing and rollback](renderer_patch/README.md)
 
-Obtain the converter from [Microsoft DirectXTex](https://github.com/microsoft/DirectXTex/releases)
-and the AI executable/models from [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN/releases).
-The existing local setup uses `tools/texconv.exe` and the official
-`realesrgan-ncnn-vulkan-20220424-windows` executable/models under `tools/esrgan/`.
-These binaries and models are not distributed in this repository.
-
-**Only run this when you deliberately want to start or resume the GPU batch:**
-
-```powershell
-uv pip install --python .venv/Scripts/python.exe -r requirements-upscale.txt
-# Only in an empty staging/ or one already belonging to this exact pipeline:
-.\.venv\Scripts\python.exe -B -m acv_tools.acv_upscale original-data/DATA staging --esrgan tools/esrgan/realesrgan-ncnn-vulkan.exe --workers 1
-```
-
-- Use untouched backups as input, **not already-enhanced installed game archives**.
-- Enlarged DDS files retain their original pixel format and include native layout
-  metadata. Existing mipmapped textures get a full new mip chain; non-mipmapped
-  textures stay non-mipmapped. Unsupported cube/volume/DX10 formats fail explicitly.
-- Native layout metadata requires the [experimental v64 renderer shim](renderer_patch/README.md).
-  It keeps UI layout at native size while uploading enlarged pixels. An unpatched
-  client may show oversized/misaligned UI even if the archive itself verifies.
-- Each final `NNN.acv` has a `.acv.json` receipt with source/output SHA-256 hashes and
-  a pipeline fingerprint (converter/model/backend-specific inputs).
-- Identical inputs reuse a checksummed, untagged `.texture-cache/`. A matching rerun
-  reuses verified archives; interrupted/unreceipted outputs are moved aside before
-  rebuilding. Tool/model changes require a new staging directory.
-- Every packed replacement is decoded and compared exactly; untouched stored
-  payloads are compared byte-for-byte. Verification is not proof of live-game safety.
-- `*.acv.progress.json` records texture progress. The previously launched background
-  job also has `batch.log` and `job.json`; those are not created by every CLI launch.
-  A full run writes `batch-report.json`. Check **330 verified**, not file count alone.
-- Never run two jobs against the same staging/cache directory. Keep the game closed
-  and do not install or move output files while a batch is running.
-
-## Tests, research and renderer
-
-Full test discovery also includes real converter/GPU integration tests when their
-local executables exist; unlike the basic test command above, it can run ESRGAN:
-
-```powershell
-# Safe DAT model/cache/tiling tests (mocked, no model inference):
-.\.venv\Scripts\python.exe -B -m unittest tests.test_dat_upscale -v
-# Integration tests: deliberately opt in only when no batch is active.
-.\.venv\Scripts\python.exe -B -m unittest discover -s tests -v
-```
-
-The renderer has separate C++ and graphics tests; see its
-[build, testing and rollback guide](renderer_patch/README.md). It is an experimental,
-client-specific memory patch, not a universal renderer or protection bypass.
-
-Offline probes live in `research/`; normal extraction/repacking does not need
-Ghidra, Unicorn or a recovered executable. For local research dependencies, either
-install `unicorn` and `pefile` into your environment or expose the existing ignored
-folder before running research modules:
-
-```powershell
-$env:PYTHONPATH = "$PWD/diagnostics/python-re-libs"
-.\.venv\Scripts\python.exe -B -m research.checkpoint_loader --self-test
-```
-
-Ghidra scripts are in `research/ghidra_scripts/`; Ghidra and a compatible JDK must be
-obtained separately. [Historical notes](docs/acv-research-history.md) retain old paths
-as provenance, not current commands.
-
-On my local test installation, renderer-tagged `001`–`021` and `262` were installed
-for testing, with backups outside this repository in `../renderer_patch/test-backup/`.
-Those installed game archives are **not untouched originals**. Tested UI screens
-were confirmed working, but that does not establish exhaustive UI/HUD or gameplay
-coverage. Follow the renderer guide before installation or rollback.
+Local game assets, tools and generated outputs are Git-ignored, not backed up by
+Git. Keep separate backups and do not upload proprietary assets or credentials.

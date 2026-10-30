@@ -204,10 +204,17 @@ def resize_dds(raw, source, destination, texconv, esrgan=None, cache=None, model
     if not output.exists():
         raise ValueError('texconv did not produce a DDS file')
     converted = output.read_bytes()
-    if prepared and struct.unpack_from('<I', raw, 88)[0] == 24:
+    compressed = bool(struct.unpack_from('<I', raw, 80)[0] & 4)
+    if (compressed
+            and raw[84:88] in (b'DXT1', b'DXT3', b'DXT5')
+            and converted[80:88] == raw[80:88]):
+        # DXT RGB bit counts/masks are unused; retain native values that texconv clears.
+        converted = converted[:88] + raw[88:108] + converted[108:]
+        output.write_bytes(converted)
+    elif prepared and not compressed and struct.unpack_from('<I', raw, 88)[0] == 24:
         converted = restore_rgb24(converted, raw)
         output.write_bytes(converted)
-    elif prepared and struct.unpack_from('<5I', raw, 88) == (16, 0x7c00, 0x3e0, 0x1f, 0):
+    elif prepared and not compressed and struct.unpack_from('<5I', raw, 88) == (16, 0x7c00, 0x3e0, 0x1f, 0):
         # DXGI exposes RGB555 only with alpha; restore the original unused-X header.
         converted = converted[:76] + raw[76:108] + converted[108:]
         output.write_bytes(converted)
@@ -241,10 +248,33 @@ def verify_archive(source, output, replacements):
                     raise ValueError(f'Unchanged stored payload mismatch: {old[0]}')
 
 
+def receipt_path(output):
+    """Read either layout; never choose silently between two receipts."""
+    current = output.parent / '.metadata' / (output.name + '.json')
+    legacy = output.with_name(output.name + '.json')
+    if current.parent.is_symlink() or current.is_symlink() or legacy.is_symlink():
+        raise ValueError('Linked archive metadata is not supported')
+    if current.exists() and legacy.exists():
+        raise ValueError(f'Multiple archive receipts: {output}')
+    return legacy if legacy.exists() else current
+
+
+def finalize_metadata(output):
+    """Call only after the output and its published receipt have been verified."""
+    receipt = receipt_path(output)
+    if not receipt.is_file():
+        raise ValueError(f'Cannot finish without a published receipt: {output}')
+    target = output.parent / '.metadata' / receipt.name
+    target.parent.mkdir(exist_ok=True)
+    if receipt != target:
+        receipt.rename(target)
+    output.with_name(output.name + '.progress.json').unlink(missing_ok=True)
+
+
 def process(source, staging, texconv, esrgan=None, pipeline=None, model=None):
     start = time.monotonic()
     output = staging / source.name
-    receipt = staging / (source.name + '.json')
+    receipt = receipt_path(output)
     source_hash = digest(source)
     pipeline = pipeline or pipeline_identity(texconv, esrgan, model)
     saved = None
@@ -258,6 +288,7 @@ def process(source, staging, texconv, esrgan=None, pipeline=None, model=None):
                 and saved.get('source_sha256') == source_hash
                 and output.exists() and saved.get('output_sha256') == digest(output)):
             if saved.get('renderer') == RENDERER:
+                finalize_metadata(output)
                 return saved
             # Rebuild legacy untagged repacks below, reusing the unchanged image cache.
         else:
@@ -268,6 +299,7 @@ def process(source, staging, texconv, esrgan=None, pipeline=None, model=None):
         for path in (output, receipt):
             if path.exists():
                 path.rename(recovery / path.name)
+    receipt = receipt_path(output)
     result = {'archive': source.name, 'textures': 0, 'resized': 0, 'at_cap': 0,
               'source_sha256': source_hash, 'pipeline': pipeline, 'renderer': RENDERER}
     if model:
@@ -280,9 +312,10 @@ def process(source, staging, texconv, esrgan=None, pipeline=None, model=None):
         with source.open('rb') as stream:
             entries = read_index(stream)
             paths = [safe_relative_path(e[0]) for e in entries]
-            keys = [p.as_posix().casefold() for p in paths]
+            keys = [p.as_posix().casefold() for p in paths if p.suffix.lower() == '.dds']
+            # Non-DDS duplicates stay opaque; only texture replacements must be unambiguous.
             if len(keys) != len(set(keys)):
-                raise ValueError('Duplicate archive paths')
+                raise ValueError('Duplicate DDS archive paths')
             for entry, path in zip(entries, paths, strict=True):
                 if path.suffix.lower() != '.dds':
                     continue
@@ -322,7 +355,9 @@ def process(source, staging, texconv, esrgan=None, pipeline=None, model=None):
         partial.rename(output)
         pending_receipt = work / 'receipt.json'
         pending_receipt.write_text(json.dumps(result, indent=2) + '\n')
+        receipt.parent.mkdir(exist_ok=True)
         pending_receipt.replace(receipt)
+        finalize_metadata(output)
     return result
 
 

@@ -124,10 +124,10 @@ validated a staged copy and have a recovery plan.
 
 ### Automated UltraSharp staging
 
-See the [UltraSharp setup and commands](../README.md#ultrasharpv2-comparison-cpu-reference)
+See the [UltraSharp setup and commands](upscaling.md#ultrasharpv2-comparison-cpu-reference)
 for the optional DAT backends. `--model` uses CPU for `.safetensors`/`.pth` or
 Windows DirectML GPU adapter 0 for the author's FP32 `.onnx` export; see the
-[GPU setup](../README.md#ultrasharpv2-gpu-onnxdirectml). It applies the selected 4×
+[GPU setup](upscaling.md#ultrasharpv2-gpu-onnxdirectml). It applies the selected 4×
 RGB DAT model (e.g. UltraSharpV2) to all DDS textures, including UI, text and fonts.
 Final size remains 2×, capped at 2048 on the longest side, with original alpha
 resized independently. The abandoned PyTorch/DirectML experiment produced artifacts;
@@ -136,13 +136,65 @@ not exhaustive GPU or live-game validation.
 
 The workflow decodes with texconv, enhances RGB, restores original alpha and DDS
 pixel format/mip policy, tags native dimensions, packs, then verifies replacement
-bytes and untouched stored payloads. Cache entries are untagged; receipts include
+bytes and untouched stored payloads. Duplicate non-DDS records remain separate,
+opaque entries in their original order; duplicate DDS replacement paths are rejected.
+Unused RGB bit-count/mask fields in DXT headers retain their native values even
+when texconv clears them; the FourCC and format flags must still match.
+Cache entries are untagged; receipts include
 tool/model/code/backend fingerprints. Keep one current output folder, `staging/`;
 never mix models into it or clean it while a job is running. Tagged sources are
 rejected: use `original-data/DATA`, not installed enhanced archives. Tiled DAT can
 introduce seams, and AI may change small lettering; inspect comparison images and
 use the compatible renderer shim before considering installation. No automatic
 installation occurs.
+
+### Completed archive metadata
+
+New receipts live in `STAGED/.metadata/NNN.acv.json`, not beside the ACVs.
+Readers also accept the legacy `STAGED/NNN.acv.json`; having both is an error.
+A verified resume with matching source/output hashes, pipeline and renderer moves
+an old receipt to `.metadata/` without changing its bytes. Receipt layout changes
+still change the implementation fingerprint: old fingerprints are never rewritten
+or silently accepted as current output.
+
+`NNN.acv.progress.json` is removed only after verification and receipt publication,
+or a fully verified matching resume. Failures keep progress; batch logs, reports,
+recovery directories, texture manifests and image caches are not cleaned. Receipts
+are retained because safe resume and incremental texture reuse require them.
+
+## Texture manifests and incremental updates
+
+`python -B -m acv_tools.texture_manifest build SOURCE STAGED NEW_MANIFEST_DIRECTORY`
+logs all receipted archives in `STAGED` (or just `SOURCE` when it is one ACV).
+Discovery supports both `.metadata/` and legacy adjacent receipts without scanning
+nested manifest, update or recovery directories.
+It reads original and enhanced DDS payloads, validates archive receipts and native
+renderer tags, records texture hashes/locations and preserves opaque duplicate
+entries without decoding them. It runs no converter or AI. Partial inventory after
+an error is not complete: only a successful run publishes `index.json`.
+
+`python -B -m acv_tools.texture_manifest update NEW_ORIGINAL_ACV NEW_OUTPUT_DIRECTORY
+--manifest MANIFEST_DIRECTORY --model TRUSTED_MODEL` seeds the new pipeline cache
+only with byte-verified matches, then uses the existing verified packer/upscaler.
+Both command lines are shown for PowerShell in the [upscaling guide](upscaling.md#texture-inventory-and-game-updates).
+Every update writes its own manifest and reuse report. Previous outputs are never
+overwritten; keep update directories beneath `staging/` if using one output tree.
+
+Keep versioned, untouched snapshots of previous originals as well as enhanced
+archives and their receipts. Recovery checks the old original archive hash, the
+actual decoded native DDS at the recorded entry, the old enhanced archive hash,
+its decoded output/cache hashes, and receipt pipeline/model/backend. This prevents
+edited log/index pairs from rebinding pixels to another texture. JSON checksums
+are corruption detection, not signatures: keep the working directories trusted
+and do not modify inputs or receipts during an operation.
+
+Automatic reuse is restricted to the exact current pipeline. Explicit
+`--reuse-pipeline` overrides are only for reviewed compatible implementations;
+never use them to hide a changed model/tool/backend or dependency. Incompatible
+records are not cache hits and may require fresh inference. The original pilot
+and later header-fix batches can have different fingerprints; inventory preserves
+those distinctions instead of falsely relabelling all outputs as one pipeline.
+Neither byte verification nor reuse establishes live-game compatibility.
 
 ## Recovered format and implementation
 
