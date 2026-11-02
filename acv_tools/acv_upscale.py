@@ -47,6 +47,29 @@ def is_preserved_psd(raw):
     return True
 
 
+def preserved_image_format(raw):
+    """Keep validated formats that cannot safely follow the RGB/renderer pipeline."""
+    if is_preserved_psd(raw):
+        return 'PSD'
+    if len(raw) < 84 or raw[:4] != b'DDS ' or not struct.unpack_from('<I', raw, 80)[0] & 0x20:
+        return None
+    width, height, _ = dds_info(raw)
+    if raw[32:40] == MAGIC:
+        raise ValueError('Use untouched original textures, not renderer-tagged P8 inputs')
+    if struct.unpack_from('<8I', raw, 76) != (32, 0x20, 0, 8, 0, 0, 0, 0):
+        raise ValueError('Unsupported palette-indexed DDS header')
+    levels = max(1, struct.unpack_from('<I', raw, 28)[0])
+    if len(raw) > MAX_RAW or width * height * 4 > MAX_RAW:
+        raise ValueError('Oversized palette-indexed DDS')
+    if levels > max(width, height).bit_length():
+        raise ValueError('Invalid palette-indexed DDS mip count')
+    expected = 128 + 1024 + sum(max(1, width >> level) * max(1, height >> level)
+                                for level in range(levels))
+    if len(raw) != expected:
+        raise ValueError('Invalid palette-indexed DDS palette or mip payload size')
+    return 'P8'
+
+
 def target_size(width, height):
     scale = min(2, 2048 / max(width, height))
     if scale <= 1:
@@ -337,9 +360,10 @@ def process(source, staging, texconv, esrgan=None, pipeline=None, model=None):
                 incoming = work / 'input.dds'
                 converted_dir = work / 'converted'
                 try:
-                    if is_preserved_psd(raw):
+                    preserved_format = preserved_image_format(raw)
+                    if preserved_format:
                         result.setdefault('preserved_images', []).append({
-                            'path': entry[0], 'format': 'PSD',
+                            'path': entry[0], 'format': preserved_format,
                             'source_sha256': hashlib.sha256(raw).hexdigest()})
                         continue
                     result['textures'] += 1

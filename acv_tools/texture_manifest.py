@@ -13,8 +13,8 @@ from .acv_upscale import (
     dds_format,
     dds_info,
     digest,
-    is_preserved_psd,
     pipeline_identity,
+    preserved_image_format,
     process,
     receipt_path,
     tag_dds,
@@ -93,12 +93,13 @@ def capture(source, staged):
                 raise ValueError('Duplicate DDS archive paths')
             seen.add(key)
             native, enhanced = decode_entry(original, old), decode_entry(rebuilt, new)
-            if is_preserved_psd(native):
+            preserved_format = preserved_image_format(native)
+            if preserved_format:
                 original.seek(old[4])
                 rebuilt.seek(new[4])
                 if old[2:4] != new[2:4] or original.read(old[2]) != rebuilt.read(new[2]):
-                    raise ValueError(f'Preserved PSD stored payload changed: {old[0]!r}')
-                preserved.append({'path': old[0], 'format': 'PSD',
+                    raise ValueError(f'Preserved {preserved_format} stored payload changed: {old[0]!r}')
+                preserved.append({'path': old[0], 'format': preserved_format,
                                   'source_sha256': sha256(native)})
                 continue
             plain = untag(native, enhanced)
@@ -226,7 +227,7 @@ def stage_update(source, destination, manifest, texconv, model, reuse_pipelines=
                 raise ValueError('Duplicate DDS archive paths')
             seen.add(key)
             native = decode_entry(stream, entry)
-            if is_preserved_psd(native):
+            if preserved_image_format(native):
                 continue
             width, height, _ = dds_info(native)
             if native[32:40] == MAGIC:

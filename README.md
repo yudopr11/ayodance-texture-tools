@@ -60,7 +60,9 @@ before considering installation.
 
 The UltraSharpV2 preset enhances all DDS textures, then produces **2× dimensions**,
 capped at **2048 pixels on the longest side**. Original alpha, DDS pixel formats
-and mipmap policy are preserved. AI can distort small text, and tiled inference
+and mipmap policy are preserved. Valid palette-indexed P8 DDS and mislabeled PSD
+images stay byte-identical at native resolution and are listed in `preserved_images`.
+AI can distort small text, and tiled inference
 can introduce seams. Doubling both dimensions uses roughly 4× the texture memory.
 
 For Windows GPU processing:

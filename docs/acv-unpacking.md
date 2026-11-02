@@ -144,8 +144,12 @@ Some original `.dds` entries actually contain Photoshop PSD images. Valid PSDs
 are decoded for identification but retained with their original name and stored
 payload bytes; they are not converted, tagged or AI-upscaled. Receipts and texture
 manifests list these separately in `preserved_images` with their paths and source
-hashes, outside DDS texture counts. Malformed PSDs, invalid DDS headers and unknown
-image payloads still fail; a filename alone never establishes an image format.
+hashes, outside DDS texture counts. Valid palette-indexed P8 DDS images also stay
+byte-identical at native resolution and are logged as `P8` in `preserved_images`;
+the RGB enhancement/renderer path cannot preserve their indexed-color format.
+Their 256-entry palette and all declared mips must have the exact expected size.
+Malformed PSDs/P8 DDS, invalid DDS headers and unknown image payloads still fail;
+a filename alone never establishes an image format.
 Cache entries are untagged; receipts include
 tool/model/code/backend fingerprints. Keep one current output folder, `staging/`;
 never mix models into it or clean it while a job is running. Tagged sources are
