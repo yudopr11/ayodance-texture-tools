@@ -18,6 +18,7 @@ htmlcov/
 /tools/
 /ghidra_12.2_PUBLIC/
 /images/
+/graphify-out/
 
 # Reproducible native build outputs and local backups
 /renderer_patch/build/
