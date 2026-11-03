@@ -23,6 +23,7 @@ def digest(path):
 
 
 def dds_info(raw):
+    raw = source_dds(raw)
     if len(raw) < 128 or raw[:4] != b'DDS ' or struct.unpack_from('<I', raw, 4)[0] != 124:
         raise ValueError('Invalid DDS header')
     height, width = struct.unpack_from('<2I', raw, 12)
@@ -47,14 +48,46 @@ def is_preserved_psd(raw):
     return True
 
 
-def preserved_image_format(raw):
-    """Keep validated formats that cannot safely follow the RGB/renderer pipeline."""
+def preserved_image_format(raw, *, allow_tag=False):
+    """Validate exceptional formats for enhancement and historical receipts."""
     if is_preserved_psd(raw):
         return 'PSD'
+    if len(raw) >= 128 and raw[:4] == b'DDS ' and struct.unpack_from('<I', raw, 112)[0] & 0x200000:
+        flags, height, width, _, depth, mips = struct.unpack_from('<6I', raw, 8)
+        size, pf_flags, fourcc = struct.unpack_from('<3I', raw, 76)
+        caps = struct.unpack_from('<I', raw, 108)[0]
+        if (struct.unpack_from('<I', raw, 4)[0] != 124 or size != 32 or pf_flags != 4
+                or caps & 0x1008 != 0x1008
+                or (mips > 1 and (not caps & 0x400000 or not flags & 0x20000))
+                or raw[84:88] not in (b'DXT1', b'DXT3', b'DXT5')
+                or flags & 0x801007 != 0x801007
+                or struct.unpack_from('<I', raw, 112)[0] != 0x200000):
+            raise ValueError('Unsupported volume DDS header')
+        if not allow_tag and raw[32:40] == MAGIC:
+            raise ValueError('Use untouched original textures, not renderer-tagged volume inputs')
+        if not width or not height or not depth:
+            raise ValueError('Zero volume DDS dimension')
+        if len(raw) > MAX_RAW or width * height * depth * 4 > MAX_RAW:
+            raise ValueError('Oversized volume DDS')
+        levels = max(1, mips)
+        if levels > max(width, height, depth).bit_length():
+            raise ValueError('Invalid volume DDS mip count')
+        block = 8 if fourcc == int.from_bytes(b'DXT1', 'little') else 16
+        expected = 128 + sum(((max(1, width >> level) + 3) // 4)
+                             * ((max(1, height >> level) + 3) // 4)
+                             * max(1, depth >> level) * block for level in range(levels))
+        if len(raw) != expected:
+            raise ValueError('Invalid volume DDS mip payload size')
+        return 'DDS-volume'
     if len(raw) < 84 or raw[:4] != b'DDS ' or not struct.unpack_from('<I', raw, 80)[0] & 0x20:
         return None
-    width, height, _ = dds_info(raw)
-    if raw[32:40] == MAGIC:
+    if len(raw) < 128:
+        raise ValueError('Truncated palette-indexed DDS header')
+    height, width = struct.unpack_from('<2I', raw, 12)
+    if (not width or not height or struct.unpack_from('<I', raw, 4)[0] != 124
+            or struct.unpack_from('<I', raw, 24)[0] or struct.unpack_from('<I', raw, 112)[0]):
+        raise ValueError('Invalid palette-indexed DDS dimensions or resource type')
+    if not allow_tag and raw[32:40] == MAGIC:
         raise ValueError('Use untouched original textures, not renderer-tagged P8 inputs')
     if struct.unpack_from('<8I', raw, 76) != (32, 0x20, 0, 8, 0, 0, 0, 0):
         raise ValueError('Unsupported palette-indexed DDS header')
@@ -70,6 +103,72 @@ def preserved_image_format(raw):
     return 'P8'
 
 
+def rgba_dds(image):
+    """Represent a flattened composite in the renderer's existing BGRA8 format."""
+    width, height = image.size
+    if width * height * 4 + 128 > MAX_RAW:
+        raise ValueError('Oversized RGBA DDS')
+    header = bytearray(128)
+    header[:4] = b'DDS '
+    struct.pack_into('<7I', header, 4, 124, 0x100f, height, width, width * 4, 0, 1)
+    struct.pack_into('<8I', header, 76, 32, 0x41, 0, 32, 0xff0000, 0xff00, 0xff, 0xff000000)
+    struct.pack_into('<I', header, 108, 0x1000)
+    return bytes(header) + image.convert('RGBA').tobytes('raw', 'BGRA')
+
+
+def source_dds(raw):
+    """A 2D view for offline tools, never discard slices from a real 3D volume."""
+    if raw[:4] == b'8BPS':
+        is_preserved_psd(raw)
+        from PIL import Image
+        with Image.open(io.BytesIO(raw)) as image:
+            return rgba_dds(image)
+    if len(raw) >= 128 and raw[:4] == b'DDS ' and struct.unpack_from('<I', raw, 112)[0] & 0x200000:
+        preserved_image_format(raw, allow_tag=True)
+        if struct.unpack_from('<I', raw, 24)[0] != 1:
+            raise ValueError('True 3D DDS enhancement requires a validated volume renderer')
+        view = bytearray(raw)
+        struct.pack_into('<I', view, 8, struct.unpack_from('<I', raw, 8)[0] & ~0x800000)
+        struct.pack_into('<I', view, 24, 0)
+        struct.pack_into('<I', view, 112, 0)
+        return bytes(view)
+    return raw
+
+
+def encode_p8(image, original):
+    """One shared RGBA palette for the complete mip chain, with transparent coverage."""
+    from PIL import Image
+    width, height = image.size
+    levels = max(width, height).bit_length() if struct.unpack_from('<I', original, 28)[0] > 1 else 1
+    images = [image.convert('RGBA').resize((max(1, width >> level), max(1, height >> level)),
+                                         Image.Resampling.LANCZOS) for level in range(levels)]
+    pixels = b''.join(mip.tobytes() for mip in images)
+    if len(pixels) + 1152 > MAX_RAW:
+        raise ValueError('Oversized palette mip chain')
+    with Image.frombytes('RGBA', (len(pixels) // 4, 1), pixels) as strip:
+        quantized = strip.quantize(colors=255, method=Image.Quantize.FASTOCTREE,
+                                   dither=Image.Dither.NONE)
+    colors = quantized.getpalette('RGBA')
+    if colors is None:
+        raise ValueError('Quantizer did not produce a palette')
+    palette = bytearray(colors)
+    palette.extend(bytes(1024 - len(palette)))
+    # Index 255 is reserved for exactly transparent pixels; nonzero coverage stays nonzero.
+    for index in range(255):
+        palette[index * 4 + 3] = max(1, palette[index * 4 + 3])
+    palette[1020:1024] = bytes(4)
+    indices = bytearray(quantized.tobytes())
+    for index, alpha in enumerate(pixels[3::4]):
+        if alpha == 0:
+            indices[index] = 255
+    header = bytearray(original[:128])
+    struct.pack_into('<I', header, 8, 0x2100f if levels > 1 else 0x100f)
+    struct.pack_into('<3I', header, 12, height, width, width)
+    struct.pack_into('<I', header, 28, levels)
+    struct.pack_into('<I', header, 108, 0x401008 if levels > 1 else 0x1000)
+    return bytes(header + palette + indices)
+
+
 def target_size(width, height):
     scale = min(2, 2048 / max(width, height))
     if scale <= 1:
@@ -78,7 +177,8 @@ def target_size(width, height):
 
 
 AI_PIPELINE = 'realesrgan-x4plus-20220424-2x-cap2048-v1'
-RENDERER = 'v64-tagged-dimensions-v1'
+RENDERER = 'v64-tagged-dimensions-v2'
+SUPPORTED_RENDERERS = (RENDERER, 'v64-tagged-dimensions-v1')
 MAGIC = b'ACVUI2X\0'
 
 
@@ -113,6 +213,9 @@ def run_tool(command):
 
 
 def dds_format(raw):
+    raw = source_dds(raw)
+    if struct.unpack_from('<I', raw, 80)[0] == 0x20:
+        return 'P8'
     fourcc = bytes(raw[84:88])
     formats = {b'DXT1': 'BC1_UNORM', b'DXT3': 'BC2_UNORM', b'DXT5': 'BC3_UNORM'}
     if fourcc in formats:
@@ -139,6 +242,9 @@ def dds_format(raw):
 
 def tag_dds(native, enhanced):
     """Keep physical DDS dimensions; record native layout dimensions for the renderer."""
+    kind = preserved_image_format(native)
+    if kind == 'DDS-volume' and enhanced[112:116] != native[112:116]:
+        raise ValueError('Volume DDS resource type changed')
     width, height, pixel_format = dds_info(native)
     physical_width, physical_height, enhanced_format = dds_info(enhanced)
     if native[32:40] == MAGIC:
@@ -155,7 +261,8 @@ def tag_dds(native, enhanced):
     if any(enhanced[32:76]):
         raise ValueError('DDS reserved fields are already in use; refusing to overwrite them')
     result = bytearray(enhanced)
-    struct.pack_into('<8s5I', result, 32, MAGIC, 1, width, height, physical_width, physical_height)
+    tag_version = 2 if kind in ('P8', 'DDS-volume') else 1
+    struct.pack_into('<8s5I', result, 32, MAGIC, tag_version, width, height, physical_width, physical_height)
     return bytes(result)
 
 
@@ -193,6 +300,9 @@ def resize_dds(raw, source, destination, texconv, esrgan=None, cache=None, model
     if esrgan and model:
         raise ValueError('Choose one AI model backend')
     prepared = bool(esrgan or model)
+    native = raw
+    kind = preserved_image_format(native)
+    raw = source_dds(raw)
     width, height, pixel_format = dds_info(raw)
     if raw[32:40] == MAGIC:
         raise ValueError('Source DDS already has renderer metadata; use the original archive')
@@ -204,21 +314,26 @@ def resize_dds(raw, source, destination, texconv, esrgan=None, cache=None, model
     cached = None
     if prepared and cache:
         cache.mkdir(parents=True, exist_ok=True)
-        cached = cache / (hashlib.sha256(raw).hexdigest() + '.dds')
+        cached = cache / (hashlib.sha256(native).hexdigest() + '.dds')
         checksum = cached.with_suffix('.sha256')
         if cached.exists() and checksum.exists() and digest(cached) == checksum.read_text():
             shutil.copyfile(cached, output)
             return True
     source.write_bytes(raw)
+    enhanced = destination / 'enhanced.png'
     # Retain no-mip UI textures; regenerate a complete chain for mipmapped inputs.
     mips = 0 if struct.unpack_from('<I', raw, 28)[0] > 1 else 1
     command = [str(texconv), '-nologo', '-dx9', '-if', 'CUBIC', '-w', str(size[0]),
                '-h', str(size[1]), '-m', str(mips), '-o', str(destination), str(source)]
     if prepared:
         decoded = destination / 'input.png'
-        enhanced = destination / 'enhanced.png'
-        run_tool([texconv, '-nologo', '-y', '-ft', 'png', '-f', 'R8G8B8A8_UNORM',
-                  '-m', '1', '-o', destination, source])
+        if kind == 'P8':
+            from PIL import Image
+            with Image.open(io.BytesIO(raw)) as image:
+                image.convert('RGBA').save(decoded)
+        else:
+            run_tool([texconv, '-nologo', '-y', '-ft', 'png', '-f', 'R8G8B8A8_UNORM',
+                      '-m', '1', '-o', destination, source])
         # Feed RGB only; AI must not hallucinate the texture's transparency.
         if model:
             from .dat_upscale import upscale_image
@@ -235,9 +350,17 @@ def resize_dds(raw, source, destination, texconv, esrgan=None, cache=None, model
         ai_image(decoded, enhanced, size)
         command = [texconv, '-nologo', '-dx9', '-y', '-if', 'CUBIC', '-f', dds_format(raw),
                    '-m', str(mips), '-o', destination, enhanced]
-    run_tool(command)
-    if prepared:
-        (destination / 'enhanced.dds').replace(output)
+    if kind == 'P8':
+        from PIL import Image
+        with Image.open(enhanced if prepared else io.BytesIO(raw)) as image:
+            rgba = image.convert('RGBA')
+            if not prepared:
+                rgba = rgba.resize(size, Image.Resampling.BICUBIC)
+            output.write_bytes(encode_p8(rgba, raw))
+    else:
+        run_tool(command)
+        if prepared:
+            (destination / 'enhanced.dds').replace(output)
     if not output.exists():
         raise ValueError('texconv did not produce a DDS file')
     converted = output.read_bytes()
@@ -255,6 +378,18 @@ def resize_dds(raw, source, destination, texconv, esrgan=None, cache=None, model
         # DXGI exposes RGB555 only with alpha; restore the original unused-X header.
         converted = converted[:76] + raw[76:108] + converted[108:]
         output.write_bytes(converted)
+    if kind == 'DDS-volume':
+        header = bytearray(converted[:128])
+        struct.pack_into('<I', header, 8, struct.unpack_from('<I', header, 8)[0] | 0x800000)
+        struct.pack_into('<I', header, 24, 1)
+        struct.pack_into('<I', header, 108, struct.unpack_from('<I', header, 108)[0] | 8)
+        struct.pack_into('<I', header, 112, 0x200000)
+        converted = bytes(header) + converted[128:]
+        output.write_bytes(converted)
+    if len(converted) > MAX_RAW:
+        raise ValueError('Resized DDS exceeds the archive payload limit')
+    if kind == 'P8':
+        preserved_image_format(converted)
     new_width, new_height, new_format = dds_info(converted)
     if (new_width, new_height) != size or new_format != pixel_format:
         raise ValueError('Resized DDS dimensions or pixel format changed unexpectedly')
@@ -361,7 +496,7 @@ def process(source, staging, texconv, esrgan=None, pipeline=None, model=None):
                 converted_dir = work / 'converted'
                 try:
                     preserved_format = preserved_image_format(raw)
-                    if preserved_format:
+                    if preserved_format == 'DDS-volume' and struct.unpack_from('<I', raw, 24)[0] > 1:
                         result.setdefault('preserved_images', []).append({
                             'path': entry[0], 'format': preserved_format,
                             'source_sha256': hashlib.sha256(raw).hexdigest()})

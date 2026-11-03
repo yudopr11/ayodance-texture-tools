@@ -6,7 +6,7 @@
 #include <assert.h>
 
 int main(int argc,char** argv) {
-    if (argc != 3) { fprintf(stderr,"Expected absolute d3dx9_43.dll and pilot d3d9.dll paths\n"); return 2; }
+    if (argc < 3) { fprintf(stderr,"Expected absolute d3dx9_43.dll and pilot d3d9.dll paths, then optional tagged DDS files\n"); return 2; }
     HMODULE proxy = LoadLibraryA(argv[2]);
     assert(proxy);
     const char* names[] = {"Direct3DCreate9","Direct3DCreate9Ex","D3DPERF_BeginEvent",
@@ -81,6 +81,30 @@ int main(int argc,char** argv) {
     size = sizeof tag;
     assert(FAILED(texture->GetPrivateData(tag_guid,&private_tag,&size)));
     texture->Release();
+    for (int argument=3; argument<argc; ++argument) {
+        FILE* file = fopen(argv[argument],"rb"); assert(file);
+        assert(!fseek(file,0,SEEK_END));
+        long length = ftell(file); assert(length >= 128 && length <= 64*1024*1024);
+        rewind(file);
+        auto* input = static_cast<uint8_t*>(malloc(size_t(length))); assert(input);
+        assert(fread(input,1,size_t(length),file) == size_t(length)); fclose(file);
+        acv::Tag sample{}; assert(acv::parse_tag(input,size_t(length),sample));
+        uint32_t levels = acv::u32(input+28); if (!levels) levels = 1;
+        texture = nullptr;
+        result = create_tagged(device,input,UINT(length),1,1,levels,0,D3DFMT_UNKNOWN,
+            D3DPOOL_MANAGED,3,3,0,&info,nullptr,&texture,true);
+        assert(SUCCEEDED(result) && texture);
+        assert(SUCCEEDED(texture->GetLevelDesc(0,&desc)));
+        assert(desc.Width == sample.physical_width && desc.Height == sample.physical_height &&
+               info.Width == sample.logical_width && info.Height == sample.logical_height &&
+               texture->GetLevelCount() == levels);
+        assert(SUCCEEDED(texture->LockRect(0,&lock,nullptr,D3DLOCK_READONLY)));
+        auto* alpha = static_cast<uint8_t*>(malloc(size_t(sample.logical_width)*sample.logical_height));
+        assert(alpha && acv::build_alpha(alpha,sample,static_cast<const uint8_t*>(lock.pBits),
+               lock.Pitch,desc.Format,desc.Width,desc.Height));
+        free(alpha); texture->UnlockRect(0); texture->Release(); free(input);
+        printf("PASS: tagged file GPU dimensions, %u mips and native alpha: %s\n",levels,argv[argument]);
+    }
     device->Release(); d3d->Release(); DestroyWindow(window); FreeLibrary(proxy); FreeLibrary(dx);
     puts("PASS: x86 DLL exports, actual D3DX DDS parsing, physical GPU size, logical metadata, alpha mapping, untagged path, fail-closed image guard");
 }

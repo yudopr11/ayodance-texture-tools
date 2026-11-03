@@ -60,8 +60,11 @@ before considering installation.
 
 The UltraSharpV2 preset enhances all DDS textures, then produces **2× dimensions**,
 capped at **2048 pixels on the longest side**. Original alpha, DDS pixel formats
-and mipmap policy are preserved. Valid palette-indexed P8 DDS and mislabeled PSD
-images stay byte-identical at native resolution and are listed in `preserved_images`.
+and mipmap policy are preserved, with explicit handling for unusual formats:
+P8 DDS is enhanced and requantized to a shared RGBA palette; a mislabeled PSD's
+saved composite becomes BGRA DDS; depth-one DXT volumes retain their volume
+container. These need the updated renderer below. True multi-slice 3D volumes
+remain native and are listed in `preserved_images`.
 AI can distort small text, and tiled inference
 can introduce seams. Doubling both dimensions uses roughly 4× the texture memory.
 

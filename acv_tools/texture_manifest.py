@@ -9,7 +9,7 @@ from pathlib import Path
 from .acv_unpack import decode_entry, read_index, safe_relative_path
 from .acv_upscale import (
     MAGIC,
-    RENDERER,
+    SUPPORTED_RENDERERS,
     dds_format,
     dds_info,
     digest,
@@ -17,6 +17,7 @@ from .acv_upscale import (
     preserved_image_format,
     process,
     receipt_path,
+    source_dds,
     tag_dds,
     target_size,
 )
@@ -33,9 +34,14 @@ def save(path, value):
 
 
 def describe(raw):
-    width, height, _ = dds_info(raw)
-    return {'width': width, 'height': height, 'mips': max(1, struct.unpack_from('<I', raw, 28)[0]),
-            'format': dds_format(raw), 'pixel_format': raw[76:108].hex()}
+    view = source_dds(raw)
+    width, height, _ = dds_info(view)
+    result = {'width': width, 'height': height, 'mips': max(1, struct.unpack_from('<I', view, 28)[0]),
+              'format': 'PSD' if raw[:4] == b'8BPS' else dds_format(view),
+              'pixel_format': None if raw[:4] == b'8BPS' else raw[76:108].hex()}
+    if raw[:4] == b'DDS ' and struct.unpack_from('<I', raw, 112)[0] == 0x200000:
+        result['depth'] = struct.unpack_from('<I', raw, 24)[0]
+    return result
 
 
 def untag(native, enhanced):
@@ -49,7 +55,7 @@ def untag(native, enhanced):
     if dds_info(enhanced)[:2] != target_size(width, height):
         raise ValueError('Unexpected enhanced texture dimensions')
     expected_mips = (max(target_size(width, height)).bit_length()
-                     if struct.unpack_from('<I', native, 28)[0] > 1 else 1)
+                     if struct.unpack_from('<I', source_dds(native), 28)[0] > 1 else 1)
     if max(1, struct.unpack_from('<I', enhanced, 28)[0]) != expected_mips:
         raise ValueError('Enhanced texture mip policy changed')
     plain = enhanced[:32] + bytes(28) + enhanced[60:]
@@ -67,7 +73,7 @@ def capture(source, staged):
     except json.JSONDecodeError as error:
         raise ValueError(f'Invalid verified receipt JSON: {source.name}') from error
     before_hash, after_hash = digest(source), digest(output)
-    if (receipt.get('status') != 'verified' or receipt.get('renderer') != RENDERER
+    if (receipt.get('status') != 'verified' or receipt.get('renderer') not in SUPPORTED_RENDERERS
             or receipt.get('source_sha256') != before_hash
             or receipt.get('output_sha256') != after_hash):
         raise ValueError(f'Unverified or changed archive: {source.name}')
@@ -94,7 +100,9 @@ def capture(source, staged):
             seen.add(key)
             native, enhanced = decode_entry(original, old), decode_entry(rebuilt, new)
             preserved_format = preserved_image_format(native)
-            if preserved_format:
+            legacy_preserved = {'path': old[0], 'format': preserved_format,
+                                'source_sha256': sha256(native)}
+            if preserved_format and legacy_preserved in receipt.get('preserved_images', []):
                 original.seek(old[4])
                 rebuilt.seek(new[4])
                 if old[2:4] != new[2:4] or original.read(old[2]) != rebuilt.read(new[2]):
@@ -118,7 +126,7 @@ def capture(source, staged):
         raise ValueError('Preserved images differ from verified receipt')
     record = {'schema': 1, 'archive': source.name, 'source': str(source), 'output': str(output),
             'source_sha256': before_hash, 'output_sha256': after_hash,
-            'pipeline': receipt['pipeline'], 'renderer': RENDERER,
+            'pipeline': receipt['pipeline'], 'renderer': receipt['renderer'],
             'model': receipt.get('model'), 'device': receipt.get('device'),
             'status': 'verified', 'textures': textures}
     if preserved:
@@ -177,7 +185,7 @@ def load_records(manifest):
             record = json.loads(data)
         except json.JSONDecodeError as error:
             raise ValueError(f'Invalid manifest JSON: {path}') from error
-        if record.get('schema') != 1 or record.get('status') != 'verified' or record.get('renderer') != RENDERER:
+        if record.get('schema') != 1 or record.get('status') != 'verified' or record.get('renderer') not in SUPPORTED_RENDERERS:
             raise ValueError(f'Unverified manifest: {path}')
         records.append(record)
     return records
@@ -227,7 +235,8 @@ def stage_update(source, destination, manifest, texconv, model, reuse_pipelines=
                 raise ValueError('Duplicate DDS archive paths')
             seen.add(key)
             native = decode_entry(stream, entry)
-            if preserved_image_format(native):
+            if (preserved_image_format(native) == 'DDS-volume'
+                    and struct.unpack_from('<I', native, 24)[0] > 1):
                 continue
             width, height, _ = dds_info(native)
             if native[32:40] == MAGIC:

@@ -88,14 +88,31 @@ name/path, decoded source/output/cache SHA-256 hashes, dimensions, DDS pixel for
 mips, model/backend and original pipeline fingerprint. Backfilling checks both
 archive hashes against receipts, renderer tags and unchanged non-texture payloads.
 It refuses active batch locks and existing manifest directories; preserve old logs.
-Valid Photoshop PSD images mislabeled `.dds` remain byte-identical and are listed
-separately in `preserved_images` in receipts and manifests, not DDS counts. They
-are not AI-upscaled or converted during staging or incremental updates. Valid
-palette-indexed P8 DDS images are likewise preserved at native resolution and logged
-as `P8` in `preserved_images`: RGB AI and the renderer's enlarged-texture alpha path
-do not support palette indices. Their 256-entry palette and every mip payload must
-be complete; stored bytes remain identical. Unknown or malformed image payloads
-still fail explicitly.
+Exceptional formats now follow an explicit enhancement path:
+
+- **PSD mislabeled `.dds`:** enhance the saved merged composite and emit a tagged
+  BGRA8 DDS under the same archive path. Layers are not retained in this replacement;
+  keep the untouched original PSD. Alpha is resized separately, not synthesized.
+- **P8 DDS:** enhance decoded RGB, resize original alpha, then quantize all generated
+  mip levels together to one 256-entry RGBA palette. One entry is reserved for fully
+  transparent pixels. Palette color/partial-alpha approximation is lossy; inspect
+  edges. The disk format stays P8; the shim temporarily expands it to BGRA8 on upload,
+  which costs more GPU memory than native P8.
+- **Depth-one DXT1/3/5 volumes:** enhance the sole slice, retaining DXT format, the
+  volume header and mip policy on disk. The shim clears the volume-only header fields
+  in a temporary 2D upload; it does not discard any additional slice.
+- **True 3D volumes (depth > 1):** validate every compressed slice/mip and preserve
+  native bytes as `DDS-volume` in `preserved_images`. There is no validated 3D renderer
+  or alpha-hit-test path. Other volume formats, cubemaps, DX10 and malformed images
+  still fail explicitly.
+
+New receipts use renderer contract **`v64-tagged-dimensions-v2`**. P8 and depth-one
+volume DDS have version-2 tags and require a freshly built compatible shim; the old
+DLL is insufficient. Ordinary/converted PSD textures use version-1 tags, which the
+new shim also supports. Historical receipts/manifests that preserved these images
+remain readable, but are not silently relabeled or considered enhanced. Existing
+completed archives are not automatically rebuilt; retain old outputs and request a
+separate staged rebuild when replacing historical exceptions.
 
 For a game update, first take a **new untouched input snapshot**, keeping the old
 originals and enhanced archives intact. Stage one changed archive into a **new**
@@ -150,7 +167,8 @@ uv pip install --python .venv/Scripts/python.exe -r requirements-upscale.txt
 - Use untouched backups as input, **not already-enhanced installed game archives**.
 - Enlarged DDS files retain their original pixel format and include native layout
   metadata. Existing mipmapped textures get a full new mip chain; non-mipmapped
-  textures stay non-mipmapped. Unsupported cube/volume/DX10 formats fail explicitly.
+  textures stay non-mipmapped. Cube/DX10 and unsupported volume formats fail explicitly;
+true 3D volumes are validated and retained unchanged as described above.
 - Native layout metadata requires the [experimental v64 renderer shim](../renderer_patch/README.md).
   It keeps UI layout at native size while uploading enlarged pixels. An unpatched
   client may show oversized/misaligned UI even if the archive itself verifies.

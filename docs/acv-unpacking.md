@@ -140,16 +140,23 @@ bytes and untouched stored payloads. Duplicate non-DDS records remain separate,
 opaque entries in their original order; duplicate DDS replacement paths are rejected.
 Unused RGB bit-count/mask fields in DXT headers retain their native values even
 when texconv clears them; the FourCC and format flags must still match.
-Some original `.dds` entries actually contain Photoshop PSD images. Valid PSDs
-are decoded for identification but retained with their original name and stored
-payload bytes; they are not converted, tagged or AI-upscaled. Receipts and texture
-manifests list these separately in `preserved_images` with their paths and source
-hashes, outside DDS texture counts. Valid palette-indexed P8 DDS images also stay
-byte-identical at native resolution and are logged as `P8` in `preserved_images`;
-the RGB enhancement/renderer path cannot preserve their indexed-color format.
-Their 256-entry palette and all declared mips must have the exact expected size.
-Malformed PSDs/P8 DDS, invalid DDS headers and unknown image payloads still fail;
-a filename alone never establishes an image format.
+Some original `.dds` entries contain Photoshop PSD images. New enhancement runs
+flatten the validated saved composite to BGRA8 DDS under the same archive path.
+P8 DDS is decoded, enhanced and requantized with one shared RGBA palette across all
+mips; transparent coverage is retained, but palette colors/partial alpha are lossy.
+Depth-one DXT1/3/5 volumes are enhanced without changing their on-disk resource type.
+Their version-2 tags require the updated shim's temporary BGRA8/2D upload handling;
+ordinary textures and flattened PSDs use version-1 tags. Receipts identify renderer
+contract `v64-tagged-dimensions-v2`; older receipts are not silently upgraded.
+
+True multi-slice DXT volumes remain byte-identical as `DDS-volume` in
+`preserved_images`, outside enhanced texture counts: a 2D hook cannot safely process
+3D alpha/layout. Their caps, dimensions and complete mip/slice byte sizes are checked.
+Historical receipts/manifests that preserved PSD/P8/depth-one images remain readable.
+Other volume formats, cubemaps, DX10, malformed PSD/P8 DDS and unknown image payloads
+still fail; a filename alone never establishes an image format. See the
+[exceptional-format policy](upscaling.md#texture-inventory-and-game-updates) for
+conversion losses, renderer requirements and historical outputs.
 Cache entries are untagged; receipts include
 tool/model/code/backend fingerprints. Keep one current output folder, `staging/`;
 never mix models into it or clean it while a job is running. Tagged sources are

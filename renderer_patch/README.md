@@ -11,11 +11,28 @@ This x86 `d3d9.dll` shim forwards Direct3D to Windows and, for the specifically 
 - reads native dimensions from a marker in the DDS reserved header fields;
 - uploads the actual enlarged texture, but reports the original dimensions to the UI loader;
 - keeps a native-size alpha hit-test cache, using the strongest alpha in each corresponding enlarged pixel block;
-- leaves unmarked textures, other D3DX callers, and the actual DDS pixel data unchanged.
+- leaves unmarked textures and other D3DX callers unchanged;
+- for version-2 P8/depth-one volume tags only, prepares a validated temporary upload:
+  expands P8 palette indices to BGRA8, or clears depth-one volume header fields without
+  changing DXT blocks. The archive payload itself is not modified by the shim.
 
 This is not a Start/Exit or archive-001 special case: the recovered ordinary DDS loaders apply the same logic to every marked DDS, regardless of filename, widget or archive. The main `acv_tools/acv_upscale.py` pipeline now adds the marker after image-cache publication; the cache stays untagged. Use `original-data/DATA`, not already-enhanced installed archives, as the source. GDI-generated text and code-generated textures use separate paths; this does not sharpen them or prove every UI draw path is covered.
 
-The marker is `ACVUI2X\0`, version 1, at DDS offset 32. Width/height fields remain the real enlarged dimensions. This pilot is **not** a header-only resolution disguise or a downscale.
+The marker is `ACVUI2X\0` at DDS offset 32. Version 1 covers ordinary 2D DDS
+(including offline-flattened PSD composites); version 2 covers validated P8 and
+depth-one DXT1/3/5 volumes. Both retain real enlarged width/height fields. New
+receipts use renderer contract `v64-tagged-dimensions-v2`; rebuild this DLL for these
+outputs, rather than retaining the older version-1-only shim. The new shim still
+accepts older ordinary version-1 textures. This is **not** a header-only resolution
+disguise or a downscale.
+
+P8 uses one RGBA palette for all mip levels on disk and expands to BGRA8 GPU memory;
+palette color and partial-alpha quantization is lossy. The original alpha is resized
+outside the AI model. Depth-one volume uploads contain exactly one slice; true 3D
+volumes are not flattened or handled by this hook and remain native in the pipeline.
+Temporary upload buffers and complete mip payloads are bounded at 64 MiB. The hook
+addresses and client signature guard are unchanged. These formats passed offline
+GPU upload checks, not live-client call-site/layout validation.
 
 The installer checks the loaded executable's x86 image shape, entry point, loader/call-site bytes, alpha routine and CRT-release thunk before writing memory. It does not change the EXE on disk. Different client builds are refused. Live logs confirm hook execution in this client, but neither static matching nor an `ACTIVE_V64` log proves complete visual/gameplay correctness.
 
@@ -45,6 +62,11 @@ Run the standalone graphics check **with the game and full-screen D3D applicatio
 ```powershell
 & "$PWD/renderer_patch/build/gpu_probe.exe" "$PWD/../d3dx9_43.dll" "$PWD/renderer_patch/build/d3d9.dll"
 ```
+
+Optional additional arguments are paths to tagged DDS samples; each is passed
+through the shared `create_tagged` implementation to check physical dimensions,
+logical metadata, mip count and native-size alpha construction on the GPU. For
+example, append the paths to a staged P8 and depth-one volume DDS after the DLLs.
 
 This probe loads the built DLL, checks its exports and refusal of the wrong executable, parses a marked DDS with the actual D3DX DLL, and attempts real texture creation/locking. It does not launch, attach to, or modify the game. Exit 0 is a pass; exit 3 means GPU checks were blocked. A passing probe still does not validate the live game's patched x86 call sites.
 

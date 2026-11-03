@@ -62,8 +62,23 @@ static HRESULT create_tagged(IDirect3DDevice9* device,const void* data,UINT size
     }
     ImageInfo temporary{};
     ImageInfo* output_info = info ? info : &temporary;
+    uint8_t* upload = nullptr;
+    if (tag.version == 2) {
+        size_t needed = acv::upload_size(data,size);
+        if (!needed) return D3DERR_INVALIDCALL;
+        upload = static_cast<uint8_t*>(HeapAlloc(GetProcessHeap(),0,needed));
+        if (!upload) return E_OUTOFMEMORY;
+        if (!acv::prepare_upload(data,size,upload,needed)) {
+            HeapFree(GetProcessHeap(),0,upload);
+            return D3DERR_INVALIDCALL;
+        }
+        if (acv::u32(static_cast<const uint8_t*>(data)+80) == 0x20) format = D3DFMT_A8R8G8B8;
+        data = upload;
+        size = UINT(needed);
+    }
     HRESULT result = original_create(device,data,size,tag.physical_width,tag.physical_height,
         mips,usage,format,pool,filter,mip_filter,color_key,output_info,palette,texture);
+    if (upload) HeapFree(GetProcessHeap(),0,upload);
     if (FAILED(result)) { log_message("ERROR: tagged GPU texture creation failed"); return result; }
     D3DSURFACE_DESC desc{};
     if (!*texture || FAILED((*texture)->GetLevelDesc(0,&desc)) ||

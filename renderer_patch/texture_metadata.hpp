@@ -18,14 +18,71 @@ inline bool parse_tag(const void* data, size_t size, Tag& tag) {
     if (!data || size < 128) return false;
     const auto* bytes = static_cast<const uint8_t*>(data);
     if (memcmp(bytes, "DDS ", 4) || u32(bytes + 4) != 124 ||
-        u32(bytes + 76) != 32 || u32(bytes + 112) ||
-        !memcmp(bytes + 84, "DX10", 4)) return false;
+        u32(bytes + 76) != 32 || !memcmp(bytes + 84, "DX10", 4)) return false;
     memcpy(&tag, bytes + 32, sizeof tag);
-    return !memcmp(tag.magic, "ACVUI2X", 8) && tag.version == 1 &&
+    bool palette = u32(bytes + 80) == 0x20 && !u32(bytes + 84) &&
+        u32(bytes + 88) == 8 && !u32(bytes + 92) && !u32(bytes + 96) &&
+        !u32(bytes + 100) && !u32(bytes + 104) && !u32(bytes + 112);
+    bool volume = u32(bytes + 112) == 0x200000 && u32(bytes + 24) == 1 &&
+        u32(bytes + 80) == 4 && (u32(bytes + 8) & 0x801007) == 0x801007 &&
+        (u32(bytes + 108) & 0x1008) == 0x1008 &&
+        (u32(bytes + 84) == 0x31545844 || u32(bytes + 84) == 0x33545844 ||
+         u32(bytes + 84) == 0x35545844);
+    bool supported = tag.version == 1 ? !u32(bytes + 112) && !palette :
+        tag.version == 2 && (palette || volume);
+    return !memcmp(tag.magic, "ACVUI2X", 8) && supported &&
         tag.logical_width && tag.logical_height &&
         tag.logical_width <= tag.physical_width && tag.logical_height <= tag.physical_height &&
         tag.physical_width <= 16384 && tag.physical_height <= 16384 &&
         tag.physical_width == u32(bytes + 16) && tag.physical_height == u32(bytes + 12);
+}
+inline void put32(uint8_t* data, uint32_t value) { memcpy(data, &value, 4); }
+inline size_t upload_size(const void* data, size_t size) {
+    Tag tag{};
+    if (!parse_tag(data, size, tag) || tag.version != 2 || size > 64u*1024*1024) return 0;
+    const auto* bytes = static_cast<const uint8_t*>(data);
+    uint32_t levels = u32(bytes + 28);
+    if (!levels) levels = 1;
+    uint32_t width = tag.physical_width, height = tag.physical_height, maximum = width > height ? width : height;
+    uint32_t limit = 0;
+    for (; maximum; maximum >>= 1) ++limit;
+    if (levels > limit || (levels > 1 && (!(u32(bytes+8) & 0x20000) ||
+        !(u32(bytes+108) & 0x400000)))) return 0;
+    bool palette = u32(bytes+80) == 0x20;
+    if (palette && ((u32(bytes+8) & 0x1007) != 0x1007 ||
+                    !(u32(bytes+108) & 0x1000) || u32(bytes+24))) return 0;
+    size_t count = 0;
+    size_t block = u32(bytes+84) == 0x31545844 ? 8 : 16;
+    for (uint32_t level=0; level<levels; ++level) {
+        count += palette ? size_t(width)*height : size_t((width+3)/4)*((height+3)/4)*block;
+        width = width > 1 ? width/2 : 1;
+        height = height > 1 ? height/2 : 1;
+    }
+    if (size != 128 + (palette ? 1024 : 0) + count) return 0;
+    size_t result = 128 + count*(palette ? 4 : 1);
+    return result <= 64u*1024*1024 ? result : 0;
+}
+inline bool prepare_upload(const void* data, size_t size, uint8_t* output, size_t capacity) {
+    size_t needed = upload_size(data, size);
+    if (!needed || !output || capacity < needed) return false;
+    const auto* bytes = static_cast<const uint8_t*>(data);
+    memcpy(output, bytes, 128);
+    if (u32(bytes+80) == 0x20) {
+        put32(output+8, (u32(bytes+8) & ~0x80000u) | 8);
+        put32(output+20, u32(bytes+16)*4);
+        const uint32_t pf[] = {32,0x41,0,32,0xff0000,0xff00,0xff,0xff000000};
+        memcpy(output+76, pf, sizeof pf);
+        for (size_t i=0; i<size-1152; ++i) {
+            const auto* rgba = bytes+128+size_t(bytes[1152+i])*4;
+            output[128+i*4] = rgba[2]; output[129+i*4] = rgba[1];
+            output[130+i*4] = rgba[0]; output[131+i*4] = rgba[3];
+        }
+    } else {
+        memcpy(output+128, bytes+128, size-128);
+        put32(output+8, u32(bytes+8) & ~0x800000u);
+        put32(output+24, 0); put32(output+112, 0);
+    }
+    return true;
 }
 inline uint8_t alpha_at(const uint8_t* pixels, size_t pitch, uint32_t format,
                         uint32_t x, uint32_t y) {
