@@ -81,6 +81,46 @@ int main(int argc,char** argv) {
     size = sizeof tag;
     assert(FAILED(texture->GetPrivateData(tag_guid,&private_tag,&size)));
     texture->Release();
+    // Reproduce the recorded single-level 640x1024 UI request without the game.
+    const UINT ui_width = 640, ui_height = 1024, ui_size = 128+ui_width*ui_height*4;
+    auto* ui = static_cast<uint8_t*>(calloc(1,ui_size)); assert(ui);
+    memcpy(ui,dds,128);
+    acv::put32(ui+12,ui_height); acv::put32(ui+16,ui_width); acv::put32(ui+20,ui_width*4);
+    acv::Tag ui_tag = {{'A','C','V','U','I','2','X',0},1,320,512,ui_width,ui_height};
+    memcpy(ui+32,&ui_tag,sizeof ui_tag);
+    for (UINT pixel=128; pixel<ui_size; pixel+=4) { ui[pixel]=50; ui[pixel+1]=100; ui[pixel+2]=150; ui[pixel+3]=127; }
+    auto storage = [](IDirect3DTexture9* value) {
+        uint64_t bytes = 0;
+        for (UINT level=0; level<value->GetLevelCount(); ++level) {
+            D3DSURFACE_DESC level_desc{}; assert(SUCCEEDED(value->GetLevelDesc(level,&level_desc)));
+            assert(level_desc.Format == D3DFMT_A8R8G8B8 && level_desc.Pool == D3DPOOL_MANAGED);
+            bytes += uint64_t(level_desc.Width)*level_desc.Height*4;
+        }
+        return bytes;
+    };
+    IDirect3DTexture9* baseline = nullptr;
+    result = original_create(device,ui,ui_size,ui_width,ui_height,0,0,D3DFMT_UNKNOWN,D3DPOOL_MANAGED,
+                             3,3,0,&info,nullptr,&baseline);
+    assert(SUCCEEDED(result) && baseline && baseline->GetLevelCount() == 11);
+    uint64_t before = storage(baseline);
+    texture = nullptr;
+    result = create_tagged(device,ui,ui_size,1,1,0,0,D3DFMT_UNKNOWN,D3DPOOL_MANAGED,
+                          3,3,0,&info,nullptr,&texture,true);
+    assert(SUCCEEDED(result) && texture && texture->GetLevelCount() == 1);
+    assert(info.Width == 320 && info.Height == 512);
+    assert(SUCCEEDED(texture->GetLevelDesc(0,&desc)) && desc.Width == ui_width && desc.Height == ui_height);
+    uint64_t after = storage(texture);
+    assert(before == 3495244 && after == 2621440);
+    D3DLOCKED_RECT baseline_lock{};
+    assert(SUCCEEDED(baseline->LockRect(0,&baseline_lock,nullptr,D3DLOCK_READONLY)));
+    assert(SUCCEEDED(texture->LockRect(0,&lock,nullptr,D3DLOCK_READONLY)));
+    for (UINT row=0; row<ui_height; ++row)
+        assert(!memcmp(static_cast<uint8_t*>(baseline_lock.pBits)+row*baseline_lock.Pitch,
+                       static_cast<uint8_t*>(lock.pBits)+row*lock.Pitch,ui_width*4));
+    texture->UnlockRect(0); baseline->UnlockRect(0);
+    printf("PASS: single-level UI stays 640x1024 BGRA8/managed, 11 -> 1 levels, %llu -> %llu texel bytes; level-zero RGBA unchanged\n",
+           static_cast<unsigned long long>(before),static_cast<unsigned long long>(after));
+    baseline->Release(); texture->Release(); free(ui);
     for (int argument=3; argument<argc; ++argument) {
         FILE* file = fopen(argv[argument],"rb"); assert(file);
         assert(!fseek(file,0,SEEK_END));

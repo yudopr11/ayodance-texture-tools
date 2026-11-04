@@ -103,17 +103,25 @@ def preserved_image_format(raw, *, allow_tag=False):
     return 'P8'
 
 
-def rgba_dds(image):
-    """Represent a flattened composite in the renderer's existing BGRA8 format."""
+def rgba_dds(image, levels=1):
+    """Represent decoded pixels in the renderer's existing BGRA8 format."""
+    from PIL import Image
+
     width, height = image.size
-    if width * height * 4 + 128 > MAX_RAW:
-        raise ValueError('Oversized RGBA DDS')
+    if (levels < 1 or levels > max(width, height).bit_length()
+            or 128 + sum(max(1, width >> level) * max(1, height >> level) * 4
+                         for level in range(levels)) > MAX_RAW):
+        raise ValueError('Oversized RGBA DDS or invalid mip count')
     header = bytearray(128)
     header[:4] = b'DDS '
-    struct.pack_into('<7I', header, 4, 124, 0x100f, height, width, width * 4, 0, 1)
+    struct.pack_into('<7I', header, 4, 124, 0x2100f if levels > 1 else 0x100f,
+                     height, width, width * 4, 0, levels)
     struct.pack_into('<8I', header, 76, 32, 0x41, 0, 32, 0xff0000, 0xff00, 0xff, 0xff000000)
-    struct.pack_into('<I', header, 108, 0x1000)
-    return bytes(header) + image.convert('RGBA').tobytes('raw', 'BGRA')
+    struct.pack_into('<I', header, 108, 0x401008 if levels > 1 else 0x1000)
+    rgba = image.convert('RGBA')
+    return bytes(header) + b''.join(
+        rgba.resize((max(1, width >> level), max(1, height >> level)), Image.Resampling.LANCZOS)
+        .tobytes('raw', 'BGRA') for level in range(levels))
 
 
 def source_dds(raw):
@@ -123,6 +131,33 @@ def source_dds(raw):
         from PIL import Image
         with Image.open(io.BytesIO(raw)) as image:
             return rgba_dds(image)
+    if raw[:4] == b'DDS ' and raw[84:88] == b'DX10':
+        if len(raw) < 148:
+            raise ValueError('Truncated DX10 DDS header')
+        flags, height, width, _, depth, mips = struct.unpack_from('<6I', raw, 8)
+        caps = struct.unpack_from('<I', raw, 108)[0]
+        if (struct.unpack_from('<I', raw, 4)[0] != 124
+                or struct.unpack_from('<8I', raw, 76) != (32, 4, int.from_bytes(b'DX10', 'little'), 0, 0, 0, 0, 0)
+                or struct.unpack_from('<5I', raw, 128) != (98, 3, 0, 1, 1)
+                or struct.unpack_from('<I', raw, 112)[0] or depth not in (0, 1)
+                or flags & 0x1007 != 0x1007 or flags & 0x800000 or not caps & 0x1000
+                or (mips > 1 and (caps & 0x400008 != 0x400008 or not flags & 0x20000))):
+            raise ValueError('Unsupported DX10 DDS: require single 2D BC7_UNORM with straight alpha')
+        if raw[32:40] == MAGIC:
+            raise ValueError('Use untouched original textures, not renderer-tagged DX10 inputs')
+        levels = max(1, mips)
+        if (not width or not height or levels > max(width, height).bit_length()
+                or len(raw) > MAX_RAW or 128 + sum(max(1, width >> level) * max(1, height >> level) * 4
+                    for level in range(levels)) > MAX_RAW):
+            raise ValueError('Invalid or oversized BC7 dimensions/mip count')
+        expected = 148 + sum(((max(1, width >> level) + 3) // 4)
+                             * ((max(1, height >> level) + 3) // 4) * 16 for level in range(levels))
+        if len(raw) != expected:
+            raise ValueError('Invalid BC7 mip payload size')
+        from PIL import Image
+        with Image.open(io.BytesIO(raw)) as image:
+            image.load()
+            return rgba_dds(image, levels)
     if len(raw) >= 128 and raw[:4] == b'DDS ' and struct.unpack_from('<I', raw, 112)[0] & 0x200000:
         preserved_image_format(raw, allow_tag=True)
         if struct.unpack_from('<I', raw, 24)[0] != 1:
@@ -308,6 +343,8 @@ def resize_dds(raw, source, destination, texconv, esrgan=None, cache=None, model
         raise ValueError('Source DDS already has renderer metadata; use the original archive')
     size = target_size(width, height)
     if size == (width, height):
+        if native[84:88] == b'DX10':
+            raise ValueError('At-cap BC7 requires a separate same-size conversion workflow')
         return False
     destination.mkdir(parents=True, exist_ok=True)
     output = destination / source.name

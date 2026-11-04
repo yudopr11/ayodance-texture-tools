@@ -63,7 +63,8 @@ capped at **2048 pixels on the longest side**. Original alpha, DDS pixel formats
 and mipmap policy are preserved, with explicit handling for unusual formats:
 P8 DDS is enhanced and requantized to a shared RGBA palette; a mislabeled PSD's
 saved composite becomes BGRA DDS; depth-one DXT volumes retain their volume
-container. These need the updated renderer below. True multi-slice 3D volumes
+container. Single 2D BC7_UNORM/straight-alpha DX10 DDS is decoded to BGRA8 for
+D3D9 compatibility, retaining the mip policy. These need the updated renderer below. True multi-slice 3D volumes
 remain native and are listed in `preserved_images`.
 AI can distort small text, and tiled inference
 can introduce seams. Doubling both dimensions uses roughly 4× the texture memory.
@@ -100,23 +101,34 @@ this repo's compatible `renderer_patch` shim to preserve native UI size and hit
 areas. Replacing ACV files alone is not enough. Obtain written publisher permission
 before deployment; the official modification ban above still applies.
 
-For a permitted test on the supported client build:
+**Two builds, different scopes:** the default comprehensive build remains
+[deliberately inactive](renderer_patch/README.md#current-candidate-is-deliberately-inactive).
+A separate [two-DLL cache test bundle](renderer_patch/CACHE-TEST.md) enables the
+renderer and full-width cache-ID correction with guarded publication, without
+changing enhanced textures or enabling the prefix/I/O experiment. **Both matching
+DLLs—`d3d9.dll` and `acv_patch_boundary.dll`—are required beside `Audition.exe`**
+for this bundle, not just `d3d9.dll`. Follow its dedicated build, installation,
+log checks and rollback instructions—not the inactive single-DLL build. Neither
+DLL is needed for offline unpacking/upscaling/repacking. No prebuilt DLLs are shipped.
 
-1. Follow the [renderer build and graphics checks](renderer_patch/README.md).
-   The build produces **`renderer_patch/build/d3d9.dll`**; no prebuilt DLL is
-   included. Do not build or install while an upscale batch is active.
-2. Close the game and back up the working archives and any existing DLL outside
-   the game folder. Copy the built **`d3d9.dll` beside `Audition.exe`**, not into
-   `DATA/`. If an older copy of **this same shim** is there, replace it only after
-   backing it up. Do not blindly overwrite an unrelated wrapper or vendor DLL;
-   stop if you cannot identify the existing file. Never replace a Windows system
-   DLL, `d3dx9_43.dll`, or the client EXE.
-3. Manually copy only the verified, tagged test archives from `staging/` into the
-   test copy's `DATA/`, backing up each corresponding archive before replacing it.
-   Do not copy caches, receipts or texture manifests into the game.
-4. Check `renderer-patch.log` beside the DLL. `ACTIVE_V64` confirms hook
-   installation, not full compatibility; `INACTIVE` means stop and roll back.
-   Follow the renderer guide's failure handling, visual checks and rollback steps.
+On **2026-11-04**, the owner reported the full installed set working: 330 ACVs
+(with the repaired 262), 48 loose DDS and 43 JPG; six stale user DDS outputs were
+not installed. See the [recorded scope and limits](renderer_patch/README.md#current-local-validation--2026-11-04).
+This is one client's successful test, not exhaustive compatibility, a proven cause
+for every earlier CTD, or publisher permission.
+
+For a permitted test, close the game and any upscale batch first. Back up the
+working archives and DLLs outside the game folder. Install only verified outputs
+and the matching bundle beside `Audition.exe`; never overwrite an unidentified
+wrapper, Windows system DLL, `d3dx9_43.dll` or the client EXE. Keep receipts,
+caches and manifests out of the game. `ACTIVE_V64` confirms installation, not
+full compatibility; follow the bundle's stop/rollback rules on failure.
+
+`renderer-patch.log` defaults to startup and failure messages only. For
+[minimal logging](renderer_patch/README.md#minimal-logging-default), clear
+`ACV_RENDER_TRACE` and move `renderer-trace.enabled` out of the game folder before
+the next launch. Verbose tracing is optional; disabling it does not disable either
+DLL or its patches. There is no supported fully-off logging switch.
 
 ## More information
 

@@ -12,9 +12,12 @@ in `research/`, Ghidra scripts in `research/ghidra_scripts/`, and tests in `test
 Use `python -m acv_tools.<module>` or `python -m research.<module>` from the project
 root. Commands and machine-specific paths below are historical records, not current
 setup instructions; they intentionally retain their original locations and findings.
-See the [project README](../README.md) for current hardware requirements, batch status
-and local-data exclusions. The RX 9070 XT mentioned there is the GPU used on my own
-machine, not a requirement for other users.
+See the [project README](../README.md) for current setup and local-data exclusions,
+the [upscaling guide](upscaling.md) for hardware examples, and the
+[renderer status](../renderer_patch/README.md#current-local-validation--2026-11-04)
+for the later full-set owner-reported test and its limits. Historical single-DLL
+instructions do not describe the current matching two-DLL bundle. The RX 9070 XT
+is the GPU used on my own machine, not a requirement for other users.
 
 **Diagnostics relocation:** loose JSON/PNG reports now live under
 `diagnostics/reports/`, surviving decompilation reports under

@@ -1,0 +1,33 @@
+#pragma once
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+namespace acv {
+// Exact recovered-v64 ABI guards, image SHA 47d0e6b9bcaa3008fa91bd86dd8d3b290aa8ee55bf3391d9cba0a6f43246a73d.
+struct ArchiveIoGuard { uintptr_t address; const uint8_t* bytes; size_t size; };
+static const uint8_t archive_io_guard_0[] = "\x55\x8b\xec\x6a\xff\x68\x51\x8d\xd0\x00\x64\xa1\x00\x00\x00\x00\x50\x81\xec\x98\x04\x00\x00";
+static const uint8_t archive_io_guard_1[] = "\x8d\x85\xf0\xfe\xff\xff\xb9\xd0\xf9\x19\x01\x50\xe8\x33\xb0\xff\xff\xb9\x20\x6a\xd8\x00\x8b\x70\x20";
+static const uint8_t archive_io_guard_2[] = "\x89\x47\x50\x85\xc0\x74\x1d\x6a\x00\x8d\x8d\xe0\xfc\xff\xff\x51\xff\xb5\xe8\xfc\xff\xff\x50\xff\x34\xb5\x80\xa0\xc2\x03\xff\x15\x3c\x41\xd4\x00\x56\xe8\x13\xf1\xff\xff\x83\xc4\x04\x83\x7f\x50\x00\x0f\x85\xfa\x00\x00\x00";
+static const uint8_t archive_io_guard_3[] = "\x50\x6a\x00\x6a\x00\x6a\x04\xff\x34\xb5\x50\xa8\xc2\x03\xff\x15\x4c\x41\xd4\x00\x89\x04\xb5\x20\xb0\xc2\x03\x83\x3c\xb5\x20\xb0\xc2\x03\x00\x0f\x85\xa3\x01\x00\x00";
+static const uint8_t archive_io_guard_4[] = "\x55\x8b\xec\x53\x8b\xd9\x56\x8b\x75\x08\x57\x8b\x03\x56\xff\x10";
+static const uint8_t archive_io_guard_5[] = "\x8b\x44\xfb\x08\x5f\x5e\x5b\x5d\xc2\x04\x00";
+static const uint8_t archive_io_guard_6[] = "\x55\x8b\xec\x53\x8b\xd9\x56\x57\x8b\x7d\x08\x8b\x03\x57\xff\x10";
+static const uint8_t archive_io_guard_7[] = "\x56\x6a\x00\x6a\x00\x6a\x04\x50\x89\x04\xbd\x50\xa8\xc2\x03\xff\x95\x0c\xfd\xff\xff\x8b\xf0\x89\x34\xbd\x20\xb0\xc2\x03\x85\xf6";
+static const uint8_t archive_io_guard_8[] = "\x8b\x47\x0c\x66\x0f\x6e\xc0\xf3\x0f\xe6\xc0\xc1\xe8\x1f\xf2\x0f\x58\x04\xc5\x90\x52\xd4\x00\x66\x0f\x5a\xc0\xf3\x0f\x59\x05\x28\x83\xd4\x00\xf3\x0f\x2c\xc0\x50\xe8\xe6\xd1\xe8\xff";
+static const ArchiveIoGuard archive_io_guards[] = {
+    {0x5aaf60,archive_io_guard_0,sizeof archive_io_guard_0-1},
+    {0x5ab0ec,archive_io_guard_1,sizeof archive_io_guard_1-1},
+    {0x5ab403,archive_io_guard_2,sizeof archive_io_guard_2-1},
+    {0x5ab368,archive_io_guard_3,sizeof archive_io_guard_3-1},
+    {0x5a6130,archive_io_guard_4,sizeof archive_io_guard_4-1},
+    {0x5a623c,archive_io_guard_5,sizeof archive_io_guard_5-1},
+    {0x5aadb0,archive_io_guard_6,sizeof archive_io_guard_6-1},
+    {0x5a7ac0,archive_io_guard_7,sizeof archive_io_guard_7-1},
+    {0x5ab6dd,archive_io_guard_8,sizeof archive_io_guard_8-1},
+};
+inline bool archive_io_ready(const void* image,uintptr_t base) {
+    for (const auto& guard : archive_io_guards)
+        if (memcmp(static_cast<const uint8_t*>(image)+(guard.address-base),guard.bytes,guard.size)) return false;
+    return true;
+}
+}

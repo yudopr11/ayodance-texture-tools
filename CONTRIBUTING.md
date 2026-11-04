@@ -39,7 +39,7 @@ These commands use synthetic data and mocks, not a real converter or GPU workloa
 
 ```powershell
 .\.venv\Scripts\python.exe -B -m unittest tests.test_acv_unpack tests.test_acv_pack tests.test_stage_renderer_pilot tests.test_cli -v
-.\.venv\Scripts\python.exe -B -m unittest tests.test_dat_upscale tests.test_texture_manifest tests.test_staging_metadata tests.test_preserved_psd tests.test_preserved_p8 tests.test_preserved_volume tests.test_exceptional_upscale -v
+.\.venv\Scripts\python.exe -B -m unittest tests.test_dat_upscale tests.test_texture_manifest tests.test_staging_metadata tests.test_preserved_psd tests.test_preserved_p8 tests.test_preserved_volume tests.test_exceptional_upscale tests.test_bc7_upscale tests.test_renderer_diagnostics -v
 ```
 
 For relevant upscaler changes, also run the synthetic/mocked methods in
@@ -53,7 +53,13 @@ Only opt into integration tests when no batch is active:
 ```
 
 Native builds, graphics probes and live-game tests have separate instructions in
-the [renderer guide](renderer_patch/README.md). Passing Python or GPU-probe checks
+the [renderer guide](renderer_patch/README.md). The build runs seven native CPU
+executables and creates an inactive default DLL plus a distinct
+[two-DLL scoped bundle](renderer_patch/CACHE-TEST.md); only the latter is the
+current locally tested game configuration. Neither DLL is needed for offline
+Python work. Do not run builds or GPU probes merely to verify documentation.
+See [minimal logging](renderer_patch/README.md#minimal-logging-default) for tracing
+controls and their next-launch behavior. Passing Python or GPU-probe checks
 does not prove live-game compatibility. Report exactly which checks ran and which
 did not.
 

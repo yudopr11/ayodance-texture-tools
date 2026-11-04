@@ -4,9 +4,30 @@ Run these PowerShell commands from the repository root, using this project's `.v
 For initial setup, see the [user quick start](../README.md). Models, converters and
 original game assets must be obtained separately.
 
+## Current workflow and local validation
+
+The production preset is UltraSharpV2 ONNX/DirectML; CPU DAT is the reference and
+Real-ESRGAN remains a separate legacy option. Examples below use a fresh output
+folder named `staging/`; the completed local batch instead lives in `staging/DATA/`,
+with receipts and the consolidated cache under that directory. Use the actual
+output root for new jobs and manifests, not a mix of layouts.
+
+The owner reported the full installed set working on 2026-11-04; see
+[renderer validation scope](../renderer_patch/README.md#current-local-validation--2026-11-04).
+The current enhanced 262 and receipt are under
+`staging/updates/repaired-262-20261104/`, not historical `staging/DATA/262.acv`.
+The old root manifest describes its original outputs; never relabel it or replace
+its source/output bindings to imply it describes the repaired revision.
+
+Offline upscaling needs no renderer DLL. To use these enlarged textures in the
+supported client, the [scoped bundle](../renderer_patch/CACHE-TEST.md) requires
+**both matching `d3d9.dll` and `acv_patch_boundary.dll` beside `Audition.exe`**.
+The comprehensive default DLL remains inactive. Successful local testing is not
+exhaustive compatibility or publisher permission.
+
 ## Output sizing
 
-The current comparison preset uses **UltraSharpV2 (DAT2) for every DDS texture**,
+The current preset uses **UltraSharpV2 (DAT2) for every DDS texture**,
 including UI, HUD, text and fonts. The model's 4× RGB result is downsampled with
 Lanczos to **2× source dimensions**, capped at **2048 pixels on the longest side**.
 Alpha comes from the original, resized separately with Lanczos. Textures at or
@@ -101,14 +122,21 @@ Exceptional formats now follow an explicit enhancement path:
 - **Depth-one DXT1/3/5 volumes:** enhance the sole slice, retaining DXT format, the
   volume header and mip policy on disk. The shim clears the volume-only header fields
   in a temporary 2D upload; it does not discard any additional slice.
+- **BC7/DX10:** single 2D BC7_UNORM (DXGI 98), one array element and explicit straight
+alpha are decoded to BGRA8 DDS for D3D9 compatibility. Original alpha is resized
+separately; mipmapped inputs get the usual full output chain. This intentionally
+changes the pixel format and uses more storage/GPU memory than BC7. Other DX10
+formats, arrays, cubes and alpha modes still fail. Manifests log both formats.
+BC7 inputs already at the size cap fail explicitly: same-size format replacement
+needs a separate workflow, rather than silently keeping D3D9-unsupported BC7.
 - **True 3D volumes (depth > 1):** validate every compressed slice/mip and preserve
   native bytes as `DDS-volume` in `preserved_images`. There is no validated 3D renderer
-  or alpha-hit-test path. Other volume formats, cubemaps, DX10 and malformed images
+  or alpha-hit-test path. Other volume formats, cubemaps, unsupported DX10 and malformed images
   still fail explicitly.
 
 New receipts use renderer contract **`v64-tagged-dimensions-v2`**. P8 and depth-one
-volume DDS have version-2 tags and require a freshly built compatible shim; the old
-DLL is insufficient. Ordinary/converted PSD textures use version-1 tags, which the
+volume DDS have version-2 tags and require the compatible two-DLL bundle; an old
+version-1-only shim or the inactive default DLL is insufficient. Ordinary/converted PSD/BC7 textures use version-1 tags, which the
 new shim also supports. Historical receipts/manifests that preserved these images
 remain readable, but are not silently relabeled or considered enhanced. Existing
 completed archives are not automatically rebuilt; retain old outputs and request a
@@ -167,9 +195,9 @@ uv pip install --python .venv/Scripts/python.exe -r requirements-upscale.txt
 - Use untouched backups as input, **not already-enhanced installed game archives**.
 - Enlarged DDS files retain their original pixel format and include native layout
   metadata. Existing mipmapped textures get a full new mip chain; non-mipmapped
-  textures stay non-mipmapped. Cube/DX10 and unsupported volume formats fail explicitly;
+  textures stay non-mipmapped. Cubes, unsupported DX10 and unsupported volume formats fail explicitly;
 true 3D volumes are validated and retained unchanged as described above.
-- Native layout metadata requires the [experimental v64 renderer shim](../renderer_patch/README.md).
+- Native layout metadata requires the [experimental v64 two-DLL bundle](../renderer_patch/CACHE-TEST.md).
   It keeps UI layout at native size while uploading enlarged pixels. An unpatched
   client may show oversized/misaligned UI even if the archive itself verifies.
 - Each final `NNN.acv` has a `.metadata/NNN.acv.json` receipt with source/output

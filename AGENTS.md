@@ -50,11 +50,14 @@ establish live-game compatibility.
   not names/counts. Never relabel old receipts to bypass mismatches.
 - Preset: UltraSharpV2 DAT2 on all DDS RGB, then **2×, cap 2048**; resize original
   alpha separately and preserve pixel formats/mip policy. State dictionaries use CPU;
-  trusted FP32 ONNX uses DirectML GPU 0 (limited pilot validation). Do not use the
+  trusted FP32 ONNX uses DirectML GPU 0 (CPU-reference spot checks, not exhaustive
+  image validation). Do not use the
   artifact-producing PyTorch/DirectML path. Hardware examples are not requirements.
 - Keep cached DDS untagged; tag staged enlargements with native-layout metadata.
-  The compatible shim is required to avoid oversized UI. Verify decoded replacement
-  bytes and byte-identical untouched stored payloads; report every failure.
+  The current compatible scoped bundle needs both `d3d9.dll` and
+  `acv_patch_boundary.dll` beside `Audition.exe`; the default DLL stays inactive.
+  Verify decoded replacement bytes and byte-identical untouched stored payloads;
+  report every failure.
 
 ## Git and evidence
 

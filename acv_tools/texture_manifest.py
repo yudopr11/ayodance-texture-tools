@@ -37,7 +37,8 @@ def describe(raw):
     view = source_dds(raw)
     width, height, _ = dds_info(view)
     result = {'width': width, 'height': height, 'mips': max(1, struct.unpack_from('<I', view, 28)[0]),
-              'format': 'PSD' if raw[:4] == b'8BPS' else dds_format(view),
+              'format': ('PSD' if raw[:4] == b'8BPS' else
+                         'BC7_UNORM' if raw[84:88] == b'DX10' else dds_format(view)),
               'pixel_format': None if raw[:4] == b'8BPS' else raw[76:108].hex()}
     if raw[:4] == b'DDS ' and struct.unpack_from('<I', raw, 112)[0] == 0x200000:
         result['depth'] = struct.unpack_from('<I', raw, 24)[0]
@@ -49,6 +50,8 @@ def untag(native, enhanced):
         raise ValueError('Use untouched original textures, not renderer-tagged inputs')
     width, height, _ = dds_info(native)
     if target_size(width, height) == (width, height):
+        if native[84:88] == b'DX10':
+            raise ValueError('At-cap BC7 requires a separate same-size conversion workflow')
         if enhanced != native:
             raise ValueError('At-cap texture changed')
         return None

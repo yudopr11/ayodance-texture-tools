@@ -1,0 +1,5 @@
+If:
+  PathMatch: archive_phase_(seh(_test)?|unwind_test)\.c
+CompileFlags:
+  Remove: [-xc++, --target=*, -std=*]
+  Add: [-xc, -std=c11, --target=i686-pc-windows-msvc, -fms-extensions, -fexceptions]

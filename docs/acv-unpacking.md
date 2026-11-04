@@ -85,8 +85,12 @@ validation covers all entries; payload sampling is not an exhaustive verificatio
 of all 233,158 payloads. These figures describe the initial container verification;
 subsequent AI output and limited live renderer tests are documented separately in
 the [project README](../README.md) and [renderer guide](../renderer_patch/README.md).
-These checks are not a claim of 330 enhanced, game-tested outputs. For current batch
-state, inspect `staging/job.json`, progress files and actual process command lines.
+These historical container checks are not a claim of exhaustive enhanced-game
+validation. The later full-set owner-reported test and its limits are recorded in
+the [renderer status](../renderer_patch/README.md#current-local-validation--2026-11-04).
+For a running job, inspect `job.json` if present, progress/locks at the actual staging
+root and live process command lines. Completed control files may be archived;
+a missing root `job.json` does not indicate failure.
 
 ## Important limits
 
@@ -111,8 +115,9 @@ when processing the entire installation.
 
 The ACV tools handle the container, not image enhancement. Export a DDS to a
 lossless editable image with a DDS-capable tool, upscale it, then save it back as
-DDS **with the same relative filename, appropriate compression, alpha and full
-mipmap chain**. A PNG renamed to `.dds` is not a DDS texture.
+DDS **with the same relative filename, appropriate compression, original alpha
+and mip policy**: regenerate a full chain for mipmapped inputs, but keep
+single-level inputs single-level. A PNG renamed to `.dds` is not a DDS texture.
 
 Start with one non-UI texture and 2× scaling. Doubling both dimensions uses roughly
 4× the texture memory. UI atlases can use hard-coded pixel coordinates; larger
@@ -145,15 +150,19 @@ flatten the validated saved composite to BGRA8 DDS under the same archive path.
 P8 DDS is decoded, enhanced and requantized with one shared RGBA palette across all
 mips; transparent coverage is retained, but palette colors/partial alpha are lossy.
 Depth-one DXT1/3/5 volumes are enhanced without changing their on-disk resource type.
-Their version-2 tags require the updated shim's temporary BGRA8/2D upload handling;
-ordinary textures and flattened PSDs use version-1 tags. Receipts identify renderer
+Single 2D BC7_UNORM DX10 textures with straight alpha are decoded to BGRA8 DDS,
+with original alpha and the same mip policy; D3D9 cannot upload BC7 directly.
+This explicit format conversion costs more storage/GPU memory and is logged in
+texture manifests. Other DX10 formats, arrays, cubes and alpha modes still fail.
+P8/depth-one volume version-2 tags require the updated shim's temporary BGRA8/2D upload handling;
+ordinary textures and flattened PSD/converted BC7 images use version-1 tags. Receipts identify renderer
 contract `v64-tagged-dimensions-v2`; older receipts are not silently upgraded.
 
 True multi-slice DXT volumes remain byte-identical as `DDS-volume` in
 `preserved_images`, outside enhanced texture counts: a 2D hook cannot safely process
 3D alpha/layout. Their caps, dimensions and complete mip/slice byte sizes are checked.
 Historical receipts/manifests that preserved PSD/P8/depth-one images remain readable.
-Other volume formats, cubemaps, DX10, malformed PSD/P8 DDS and unknown image payloads
+Other volume formats, cubemaps, unsupported DX10, malformed PSD/P8 DDS and unknown image payloads
 still fail; a filename alone never establishes an image format. See the
 [exceptional-format policy](upscaling.md#texture-inventory-and-game-updates) for
 conversion losses, renderer requirements and historical outputs.
@@ -162,8 +171,10 @@ tool/model/code/backend fingerprints. Keep one current output folder, `staging/`
 never mix models into it or clean it while a job is running. Tagged sources are
 rejected: use `original-data/DATA`, not installed enhanced archives. Tiled DAT can
 introduce seams, and AI may change small lettering; inspect comparison images and
-use the compatible renderer shim before considering installation. No automatic
-installation occurs.
+use the compatible renderer shim before considering installation. The current
+[scoped bundle](../renderer_patch/CACHE-TEST.md) requires **both `d3d9.dll` and
+`acv_patch_boundary.dll`** beside `Audition.exe`; the default single-DLL build is
+inactive. Offline processing requires neither DLL. No automatic installation occurs.
 
 ### Completed archive metadata
 
