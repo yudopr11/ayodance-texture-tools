@@ -70,6 +70,17 @@ remain native and are listed in `preserved_images`.
 AI can distort small text, and tiled inference
 can introduce seams. Doubling both dimensions uses roughly 4× the texture memory.
 
+### Before and after
+
+![Original texture detail on the left and UltraSharpV2-enhanced detail on the right](docs/images/before-after-face-detail.png)
+
+The same region from a 1024×1024 original and its 2048×2048 enhanced texture.
+The original is enlarged with Lanczos for an equal-size comparison; the enhanced
+side shows actual output pixels without extra sharpening. This is a texture
+comparison, not an in-game screenshot.
+
+### Run GPU upscaling
+
 For Windows GPU processing:
 
 1. Get `texconv.exe` from [Microsoft DirectXTex](https://github.com/microsoft/DirectXTex/releases)
