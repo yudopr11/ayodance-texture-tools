@@ -35,10 +35,10 @@ establish live-game compatibility.
 
 ## Data and running jobs
 
-- `original-data/DATA/` is read-only. Installed `../DATA` may already be enhanced;
+- Native source backups are read-only. Installed game data may already be enhanced;
   never enhance an enhanced source. Publish separate staged outputs, never overwrite
   originals or automatically install archives, DLLs or EXEs into the game.
-- Before starting/stopping a batch, inspect `staging/job.json` if present, progress,
+- Before starting/stopping a batch, inspect its job record if present, progress,
   lock state and **live command lines**. Never trust a recorded PID alone.
 - One job per staging/cache. Do not edit active pipeline code or move, clean, rebuild
   or install active outputs. Ordinary source/docs work must not restart/interrupt a
@@ -65,7 +65,7 @@ Keep game assets, outputs/caches, models, tools, screenshots, recovered evidence
 `.venv`, native builds and credentials out of Git. Respect `.gitignore`, inspect
 staged filenames and never force-add proprietary assets. Git is not their backup.
 
-Ask before destructive cleanup. Preserve `checkpoint-v64/`, `bootstrap-static/`,
-paired Ghidra projects and matching research dependency snapshots. Check references
+Ask before destructive cleanup. Preserve matching recovery checkpoints, bootstrap
+artifacts, paired Ghidra projects and research dependency snapshots. Check references
 before organizing reports, retain historical audit contents and hash-verify moves;
 new decompilation reports do not necessarily supersede older ones.

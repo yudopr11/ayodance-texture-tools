@@ -28,10 +28,9 @@ for the synthetic tests below. See [upscaling setup](docs/upscaling.md) if neede
 | `research/` | Offline investigation scripts and Ghidra scripts |
 | `docs/` | Format guides, diagnostics and historical research |
 
-Local `original-data/`, `staging/`, `tools/`, `diagnostics/`, `images/` and `.venv/`
-are ignored assets, not dependencies shipped with the repository. Production tools
-must not depend on `research/` or private evidence. Historical commands are
-provenance, not current instructions.
+Game assets, models, external tools and research evidence are not shipped with
+this repository. Setup/output paths in examples are user-created. Production tools
+must not depend on `research/` or private evidence.
 
 ## Safe tests
 
@@ -78,9 +77,9 @@ did not.
 - Pipeline fingerprints include implementation files. Code changes can invalidate
   resume/cache compatibility; never rewrite receipts to hide a mismatch.
 
-Before starting, stopping or changing a batch, inspect `staging/job.json` when
-present, progress files, lock state and **live process command lines**. Local
-runners may create `job.json`; the normal CLI does not always do so. A stored PID
+Before starting, stopping or changing a batch, inspect its job record when
+present, progress files, lock state and **live process command lines**. Custom
+runners may create job records; the normal CLI does not always do so. A stored PID
 or a README status is not proof that a job is running. Never run a second job on
 the same cache, edit active pipeline code, or clean/move/install active outputs.
 Keep original archives read-only and preserve receipts, caches, logs and recovery
@@ -91,13 +90,9 @@ evidence. Nothing should automatically install into the game directory.
 Ordinary extraction/repacking needs no Ghidra, emulator, dump or commercial tool.
 For research-only work, read [diagnostics](docs/diagnostics.md) and the
 [historical notes](docs/acv-research-history.md). Some scripts need `unicorn` and
-`pefile`; install them separately into the local environment. An existing local
-snapshot can instead be exposed with:
-
-```powershell
-$env:PYTHONPATH = "$PWD/diagnostics/python-re-libs"
-.\.venv\Scripts\python.exe -B -m research.checkpoint_loader --self-test
-```
+`pefile`; install them separately into the project environment. Native replay
+also needs the exact trusted recovered image and dependencies expected by that
+script; these artifacts are not supplied by the repository.
 
 Ghidra scripts live in `research/ghidra_scripts/`; obtain Ghidra and a compatible
 JDK separately. Preserve recovered evidence and paired Ghidra projects; ask before

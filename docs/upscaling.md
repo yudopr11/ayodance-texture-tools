@@ -4,20 +4,19 @@ Run these PowerShell commands from the repository root, using this project's `.v
 For initial setup, see the [user quick start](../README.md). Models, converters and
 original game assets must be obtained separately.
 
-## Current workflow and local validation
+## Workflow
 
 The production preset is UltraSharpV2 ONNX/DirectML; CPU DAT is the reference and
-Real-ESRGAN remains a separate legacy option. Examples below use a fresh output
-folder named `staging/`; the completed local batch instead lives in `staging/DATA/`,
-with receipts and the consolidated cache under that directory. Use the actual
-output root for new jobs and manifests, not a mix of layouts.
+Real-ESRGAN remains a separate legacy option. All input, output and tool paths
+below are setup examples, not files supplied by this repository. Use untouched
+source backups and a fresh output directory for each new pipeline.
 
-The owner reported the full installed set working on 2026-11-04; see
-[renderer validation scope](../renderer_patch/README.md#current-local-validation--2026-11-04).
-The current enhanced 262 and receipt are under
-`staging/updates/repaired-262-20261104/`, not historical `staging/DATA/262.acv`.
-The old root manifest describes its original outputs; never relabel it or replace
-its source/output bindings to imply it describes the repaired revision.
+After an official patch, compare archive hashes with your verified source/output
+receipts. An enhanced-hash match needs no action; a known native-hash match can
+reuse the corresponding verified enhanced archive without AI. New or unknown
+hashes need native-source validation before processing. Individual-texture reuse
+requires the exact previous native and enhanced archives, receipts and manifests;
+hashes alone cannot reconstruct images.
 
 Offline upscaling needs no renderer DLL. To use these enlarged textures in the
 supported client, the [scoped bundle](../renderer_patch/CACHE-TEST.md) requires
@@ -60,10 +59,9 @@ $env:MKL_NUM_THREADS = '8'
 - One persistent worker loads the model once. Inference uses 128-pixel input tiles
   with 32-pixel context, cropped before stitching. DAT has global attention; tiled
   inference is approximate and can show seams or color shifts.
-- `staging/preview/` holds local comparison images, when generated. The comparison
-  shows original, Lanczos and actual repacked UltraSharp DDS pixels at equal display
-  size. AI may sharpen lettering incorrectly; very small text cannot be recovered
-  reliably, and original-alpha preservation can retain a soft outline.
+- Compare original, Lanczos and actual repacked UltraSharp DDS pixels at equal
+  display size. AI may sharpen lettering incorrectly; very small text cannot be
+  recovered reliably, and original-alpha preservation can retain a soft outline.
 - Fingerprints include the model, converter, implementation, package versions,
   precision and tiling policy. Cached DDS images remain untagged. A changed pipeline
   refuses mismatched receipts; archive/move the old `staging/` safely before reusing
@@ -147,7 +145,7 @@ originals and enhanced archives intact. Stage one changed archive into a **new**
 subdirectory, never over the previous outputs:
 
 ```powershell
-.\.venv\Scripts\python.exe -B -m acv_tools.texture_manifest update updated-originals/DATA/061.acv staging/updates/patch-001 --manifest staging/texture-manifest --model tools/ultrasharp/4x-UltraSharpV2_fp32_op17.onnx
+.\.venv\Scripts\python.exe -B -m acv_tools.texture_manifest update updated-originals/DATA/061.acv staging/patch-001 --manifest staging/texture-manifest --model tools/ultrasharp/4x-UltraSharpV2_fp32_op17.onnx
 ```
 
 Unchanged decoded DDS hashes recover verified enhanced bytes from the old archive
@@ -180,9 +178,9 @@ an appropriate Real-ESRGAN NCNN executable are needed for this AI path.
 
 Obtain the converter from [Microsoft DirectXTex](https://github.com/microsoft/DirectXTex/releases)
 and the AI executable/models from [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN/releases).
-The existing local setup uses `tools/texconv.exe` and the official
-`realesrgan-ncnn-vulkan-20220424-windows` executable/models under `tools/esrgan/`.
-These binaries and models are not distributed in this repository.
+For the command below, place the downloaded converter at `tools/texconv.exe`
+and the Real-ESRGAN executable/models under `tools/esrgan/`, or substitute your
+own paths. These binaries and models are not distributed in this repository.
 
 **Only run this when you deliberately want to start or resume the GPU batch:**
 
@@ -210,11 +208,10 @@ true 3D volumes are validated and retained unchanged as described above.
   rebuilding. Tool/model changes require a new staging directory.
 - Every packed replacement is decoded and compared exactly; untouched stored
   payloads are compared byte-for-byte. Verification is not proof of live-game safety.
-- `*.acv.progress.json` records in-flight texture progress. It is deleted only after
-  the archive verifies and its receipt is published, or on a verified matching resume.
-  Failed jobs retain progress. Batch reports, logs and recovery evidence are kept.
-  The previously launched background job also has `batch.log` and `job.json`;
-  those are not created by every CLI launch.
-  A full run writes `batch-report.json`. Check **330 verified**, not file count alone.
+- In-flight progress is recorded separately from completed receipts. Failed jobs
+  retain progress; successful verification publishes a receipt. Keep batch reports,
+  logs and recovery evidence. The CLI writes `batch-report.json`; check that every
+  requested archive verified, not file count alone. Custom runners may also create
+  a job record or batch log; those are not standard outputs of every CLI launch.
 - Never run two jobs against the same staging/cache directory. Keep the game closed
   and do not install or move output files while a batch is running.

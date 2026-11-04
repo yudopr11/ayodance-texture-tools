@@ -8,7 +8,8 @@ are opened read-only. Repacking creates a separate new file, not an in-place edi
 
 Run from your project root (for example, `C:/path/to/acv-unpacker-upscaler`).
 This project uses its own `.venv`. All examples use PowerShell and untouched
-archives under `original-data/DATA`, not already-enhanced installed game data:
+archives under a user-created `original-data/DATA` directory, not already-enhanced
+installed game data. Input archives and example output folders are not shipped:
 
 ```powershell
 # Only needed to recreate the environment on another machine:
@@ -63,18 +64,18 @@ refuses output into the template's directory; keep originals and staging separat
 ## What is verified
 
 - **330/330 original indexes** parsed: **233,158 entries**, including **159,003 DDS
-  entries**. See `diagnostics/reports/native-index-scan-v2.json`.
+  entries**.
 - **984 real payloads** sampled across **all 330 archives** passed zlib checksum/EOF
   and exact-size validation, across all six formats. **933 DDS samples** also had
   the correct DDS magic. The three malformed non-texture records encountered in
   archives 242, 243 and 244 are explicitly logged, not silently treated as decoded.
-  See `diagnostics/reports/native-payload-samples-v3.json`.
+  These results describe the tested source revision, not every game update.
 - Repack/read-back tests passed on real archives **018, 046, 053, 052, 328 and 262**,
   covering every local format. Replacement bytes matched after decoding; every
   unprovided stored payload matched byte-for-byte; source SHA-256s were unchanged.
-  See `diagnostics/reports/real-pack-roundtrip-v1.json`.
-- A complete texture-only extraction of `262.acv` produced **12 DDS files**
-  (**3,278,496 decoded bytes**) in `diagnostics/texture-demo/262`.
+  This verifies archive preservation, not live-game compatibility.
+- A complete texture-only extraction of the tested `262.acv` revision produced
+  **12 DDS files** (**3,278,496 decoded bytes**).
 - Synthetic tests cover all format variants, small/large entry counts, masked
   length fields, replacement preservation, overwrite refusal, filename collisions,
   size limits, invalid paths, corrupt streams and native cipher padding.
@@ -85,9 +86,7 @@ validation covers all entries; payload sampling is not an exhaustive verificatio
 of all 233,158 payloads. These figures describe the initial container verification;
 subsequent AI output and limited live renderer tests are documented separately in
 the [project README](../README.md) and [renderer guide](../renderer_patch/README.md).
-These historical container checks are not a claim of exhaustive enhanced-game
-validation. The later full-set owner-reported test and its limits are recorded in
-the [renderer status](../renderer_patch/README.md#current-local-validation--2026-11-04).
+These container checks are not a claim of exhaustive enhanced-game validation.
 For a running job, inspect `job.json` if present, progress/locks at the actual staging
 root and live process command lines. Completed control files may be archived;
 a missing root `job.json` does not indicate failure.
@@ -185,10 +184,10 @@ an old receipt to `.metadata/` without changing its bytes. Receipt layout change
 still change the implementation fingerprint: old fingerprints are never rewritten
 or silently accepted as current output.
 
-`NNN.acv.progress.json` is removed only after verification and receipt publication,
-or a fully verified matching resume. Failures keep progress; batch logs, reports,
-recovery directories, texture manifests and image caches are not cleaned. Receipts
-are retained because safe resume and incremental texture reuse require them.
+In-flight progress and completed receipts are separate. Verification and receipt
+publication, or a fully verified matching resume, mark completion; failures retain
+progress. Preserve batch logs, reports, recovery evidence, texture manifests and
+image caches for safe resume and incremental texture reuse.
 
 ## Texture manifests and incremental updates
 
@@ -219,8 +218,8 @@ and do not modify inputs or receipts during an operation.
 Automatic reuse is restricted to the exact current pipeline. Explicit
 `--reuse-pipeline` overrides are only for reviewed compatible implementations;
 never use them to hide a changed model/tool/backend or dependency. Incompatible
-records are not cache hits and may require fresh inference. The original pilot
-and later header-fix batches can have different fingerprints; inventory preserves
+records are not cache hits and may require fresh inference. Outputs from different
+pipeline implementations can have different fingerprints; inventory preserves
 those distinctions instead of falsely relabelling all outputs as one pipeline.
 Neither byte verification nor reuse establishes live-game compatibility.
 
@@ -288,12 +287,8 @@ replacement playable executable. The client itself was not modified.
 Relevant recovered routines include index reader `005a6250`, index/record writer
 `005a6a30`, key selector `005a7720`, table generator `005aa1a0`, decrypt wrapper
 `00c39100`, encrypt wrapper `00c39ca0`, cipher factory `00c39f90`, and MT routines
-`00cb7700`/`00cb7850`. The archive routines and callees are recorded in
-`diagnostics/decompilation/ghidra-native-acv-v1.txt`,
-`diagnostics/decompilation/ghidra-native-acv-v2.txt` and
-`diagnostics/decompilation/ghidra-native-acv-v3.txt`.
-See the [diagnostics guide](diagnostics.md) for preserved evidence and report locations.
+`00cb7700`/`00cb7850`. See the [diagnostics guide](diagnostics.md) for research
+prerequisites and the distinction between native execution and modeled APIs.
 
-Earlier internet leads, failed hypotheses and bootstrap work are retained in
-[historical research notes](acv-research-history.md); their old unsupported-status
-statements are superseded by this document and the tests above.
+The [research background](acv-research-history.md) summarizes earlier findings
+and verification lessons; use this guide for current supported formats.

@@ -29,8 +29,9 @@ uv venv --python 3.12
 uv pip install --python .venv/Scripts/python.exe -r requirements-acv.txt
 ```
 
-Put your original archive backups in `original-data/DATA/`. The commands below
-use example archive numbers; substitute files from your own installation.
+The commands below use user-created `original-data/DATA/`, `texture-work/` and
+`staging/` directories. Supply your own untouched archive backups and substitute
+archive numbers from your installation; none of these assets are included.
 No game process or reverse-engineering tools are needed to extract or repack.
 
 ## 2. Extract and edit textures
@@ -88,9 +89,9 @@ license; review its terms before using or sharing outputs. Use only trusted mode
 files. See the [upscaling guide](docs/upscaling.md) for checksums, CPU support,
 legacy ESRGAN, resume behavior and reusing textures after game updates.
 
-Keep `staging/.metadata/` receipts, `.texture-cache/` and any `texture-manifest/`:
-resume and future updates depend on them. Successful runs remove their progress
-files; failures retain them. Never run two jobs against the same staging/cache,
+Keep the generated receipts, image cache and texture manifests: resume and future
+updates depend on them. Completed receipts record verified output; failures
+retain in-flight progress. Never run two jobs against the same staging/cache,
 change the pipeline, clean outputs or install files while a batch is running.
 The CLI writes `batch-report.json`; verify its results, not just the file count.
 
@@ -111,9 +112,8 @@ for this bundle, not just `d3d9.dll`. Follow its dedicated build, installation,
 log checks and rollback instructions—not the inactive single-DLL build. Neither
 DLL is needed for offline unpacking/upscaling/repacking. No prebuilt DLLs are shipped.
 
-On **2026-11-04**, the owner reported the full installed set working: 330 ACVs
-(with the repaired 262), 48 loose DDS and 43 JPG; six stale user DDS outputs were
-not installed. See the [recorded scope and limits](renderer_patch/README.md#current-local-validation--2026-11-04).
+On **2026-11-04**, the owner reported an enhanced set of 330 ACVs, 48 loose DDS
+and 43 JPG working with the scoped bundle. See the [recorded scope and limits](renderer_patch/README.md#current-local-validation--2026-11-04).
 This is one client's successful test, not exhaustive compatibility, a proven cause
 for every earlier CTD, or publisher permission.
 

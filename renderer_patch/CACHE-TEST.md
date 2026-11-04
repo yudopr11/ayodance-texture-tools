@@ -1,10 +1,8 @@
 # Scoped archive-cache DLL test
 
 **Locally tested, not exhaustively validated or a universally proven CTD fix.**
-On 2026-11-04, the owner reported the full installed set working with this bundle;
-see the [exact scope and limits](README.md#current-local-validation--2026-11-04).
-The controlled A/B procedure below remains the starting point for another client
-or a changed build. This bundle preserves all
+The controlled A/B procedure below is the starting point for each client or
+changed build; a successful test elsewhere does not establish compatibility. This bundle preserves all
 texture/archive bytes, dimensions, formats and level-zero pixels. It tests the
 full-width archive-ID eviction correction together with the existing tagged
 renderer, single-mip and alpha-allocation corrections. It does **not** activate
@@ -34,12 +32,9 @@ Do not use `build/d3d9.dll` (inactive), or anything in `build/boundary-test/`
 
 The build runs seven standalone CPU test executables, including real Windows
 loader/thread-exclusion tests and injected publication/rollback failures. The
-native cache instruction replay is separate:
-
-```powershell
-$env:PYTHONPATH = 'diagnostics/python-re-libs'
-.venv/Scripts/python.exe -B -m unittest research.test_archive_cache_patch -v
-```
+native cache instruction replay is separate research and requires a matching,
+trusted recovered client image that is not supplied in this repository. See the
+[research prerequisites](../docs/diagnostics.md).
 
 With the game, GPU jobs and full-screen D3D applications closed, the optional
 GPU/export check is:
@@ -92,8 +87,8 @@ Do not bypass the normal launcher or protection. No EXE or system DLL changes.
    older copy of **this shim**, its log and any same-project boundary helper
    outside the game folder. Do not replace an unrelated wrapper/vendor DLL.
 2. Keep the existing archive configuration unchanged for the first A/B test.
-   In particular, do not downscale textures, install the rejected archive-only
-   memory pilot, or expand to all 330 archives at the same time.
+   Do not change texture settings, downscale assets or expand the archive set
+   during this DLL-only comparison.
 3. Manually place the bundle's **two DLLs together beside `Audition.exe`** in
    the permitted test copy. Nothing in this repository installs them for you.
 4. Launch normally. In that session's `renderer-patch.log`, require both:
@@ -115,9 +110,9 @@ Do not bypass the normal launcher or protection. No EXE or system DLL changes.
    untouched for this DLL-only comparison. Preserve the failure log separately.
 
 For a new configuration, do not expand the archive set until this controlled
-comparison has a recorded outcome. The local expansion and full-set outcome are
-recorded above; neither that report, the CPU tests nor a standalone GPU probe
-proves every enhanced pack fits in the x86 client's address space.
+comparison has a recorded outcome. Neither a successful test, the CPU tests nor
+a standalone GPU probe proves every enhanced pack fits in the x86 client's
+address space.
 
 ## Minimal logging
 

@@ -4,24 +4,15 @@
 
 ## Current local validation — 2026-11-04
 
-The owner reported no CTD in the initial scoped-DLL test, the 268–330 expansion,
-and then the full installed set: **330 ACVs, 48 loose DDS and 43 JPG**. The full
-set uses the separately rebuilt repaired `262.acv`; six stale `user_0.dds`–
-`user_5.dds` outputs were not installed, preserving the current user files. Enhanced
-texture dimensions and pixels were not reduced for these tests. The rejected
-lower-resolution memory pilot was never installed.
-
-The installation/backup journal is locally retained at
-`diagnostics/renderer-upload-diagnostics/full-enhanced-test-20261104T213508/install.json`.
-Its owner-reported outcome is separate from immutable offline receipts. This is
-one client's controlled test, not exhaustive visual/gameplay validation or
-publisher permission. Repaired native data without the shim remains the retained
-recovery baseline, not the description of the currently installed enhanced set.
+The owner reported the scoped bundle working with enhanced textures, without
+reducing their dimensions or pixels. This is one client's controlled test, not
+exhaustive visual/gameplay validation, proof of every earlier crash's cause or
+publisher permission. Verify each new client/build configuration independently.
 
 ## Scoped cache test bundle
 
-A separate **[two-DLL cache test bundle](CACHE-TEST.md)** is now built at
-`renderer_patch/build/cache-test/`. It enables the renderer corrections and
+Run the build to generate the separate **[two-DLL cache test bundle](CACHE-TEST.md)**
+at `renderer_patch/build/cache-test/`; no prebuilt bundle is shipped. It enables the renderer corrections and
 full-width archive-ID cache fix through a loader-lock/thread-exclusion publication
 boundary. It preserves all enhanced textures and leaves the prefix/mapping/read/
 scratch hooks disabled.
@@ -108,7 +99,7 @@ This x86 `d3d9.dll` shim forwards Direct3D to Windows and, for the specifically 
   expands P8 palette indices to BGRA8, or clears depth-one volume header fields without
   changing DXT blocks. The archive payload itself is not modified by the shim.
 
-This is not a Start/Exit or archive-001 special case: the recovered ordinary DDS loaders apply the same logic to every marked DDS, regardless of filename, widget or archive. The main `acv_tools/acv_upscale.py` pipeline now adds the marker after image-cache publication; the cache stays untagged. Use verified native source payloads, never already-enhanced archives. The local `original-data/DATA` backup was refreshed from the repaired, working native installation and hash-verified on 2026-11-04; older reports about its mixed native/enhanced contents describe the superseded backup. Always verify the source/receipt hashes, including the repaired archive 262 revision. GDI-generated text and code-generated textures use separate paths; this does not sharpen them or prove every UI draw path is covered.
+This is not a Start/Exit or archive-001 special case: the recovered ordinary DDS loaders apply the same logic to every marked DDS, regardless of filename, widget or archive. The main `acv_tools/acv_upscale.py` pipeline now adds the marker after image-cache publication; the cache stays untagged. Use verified native source payloads, never already-enhanced archives. Always verify the exact source and receipt hashes; a backup's folder name does not establish that it is untouched. GDI-generated text and code-generated textures use separate paths; this does not sharpen them or prove every UI draw path is covered.
 
 The marker is `ACVUI2X\0` at DDS offset 32. Version 1 covers ordinary 2D DDS
 (including offline-flattened PSD composites); version 2 covers validated P8 and
@@ -179,8 +170,6 @@ process-memory savings. For
 example, append the paths to a staged P8 and depth-one volume DDS after the DLLs.
 
 This probe loads the built DLL, checks its exports and refusal of the wrong executable, parses a marked DDS with the actual D3DX DLL, and attempts real texture creation/locking. It does not launch, attach to, or modify the game. Exit 0 is a pass; exit 3 means GPU checks were blocked. A passing probe still does not validate the live game's patched x86 call sites.
-
-Recorded result on my own machine (not a hardware requirement): the probe was rerun with the game closed and got `CreateDevice HRESULT: 0x00000000` and the full GPU PASS, including physical texture size, logical metadata, alpha mapping and the negative forwarding path. The earlier `0x88760868` (`D3DERR_DEVICELOST`) run was blocked; its precise cause was not established.
 
 ## Minimal logging (default)
 
@@ -254,9 +243,8 @@ Each record contains `bytes`, `crc_bytes` and `crc32`: IEEE CRC32 of the first
 `min(bytes, 4096)` bytes of the **original tagged DDS**, before runtime conversion.
 The hook has no archive/texture filename. Map its fingerprint back to candidate
 paths using the exact installed archive bytes or a byte-identical staged revision,
-not untouched source bytes. In particular, current repaired 262 comes from
-`staging/updates/repaired-262-20261104/262.acv`, **not** historical
-`staging/DATA/262.acv`:
+not untouched source bytes. For offline mapping, extract the needed archive from
+your verified package first:
 
 ```powershell
 # Substitute bytes= and crc32= from the log. A directory searches its top-level ACVs.
@@ -390,12 +378,9 @@ Windows fragmentation, concurrent native callers or login. A separate Windows
 CPU test verifies 256 reads across four threads and an unchanged original cursor;
 modeled pending-I/O tests require completion before private-handle close and
 buffer release. Neither test establishes native loader synchronization.
-Read-only comparisons matched
-all 330 native and 330 staged wire extents. The corresponding **planned** staged
-page charges total 200,601,600 bytes, including the two full retained files;
-this is not an observed live memory peak. Eighty real stored-larger-than-raw
-entries passed compiled-hook/native-reader replay; two undecodable opaque records
-(one per catalog, in 262) are explicitly reported as not replayed, not passed.
+Catalog checks compare wire extents and report planned page charges, not observed
+live memory peaks. Undecodable opaque records are explicitly marked not replayed,
+not counted as native passes.
 See [offline commands and scope](../docs/diagnostics.md#compiled-archive-io-candidate).
 
 These changes **do not guarantee the full enhanced pack fits**. Doubling both
@@ -405,32 +390,10 @@ ignore failed upload HRESULTs, and deterministic outputs do not make every later
 null-texture consumer safe. No automatic downscale, lossy format change,
 allocation retry, pool switch or crash-swallowing handler is added.
 
-Historically, repaired native data and the prior mip/allocator build with native
-assets were reported stable. An earlier full-330 enhanced test exited immediately
-after login without a tagged-upload record; untagged uploads were not traced, so
-that did not establish the failing instruction. The scoped cache bundle was
-subsequently installed and the owner reported the full enhanced set working, as
-recorded [above](#current-local-validation--2026-11-04). That outcome supports this
-local configuration, not precise CTD causation or a general memory-fit guarantee.
+A successful test of one configuration is not precise CTD attribution or a general
+memory-fit guarantee.
 Preserve native backups, earlier failure evidence and each new test outcome. A
 standalone probe is not live-client validation.
-
-## Historical repacked pilot installation
-
-In an earlier local pilot, `staging-renderer-pilot/001.acv` through `021.acv`, plus `262.acv`, were repacked, verified and installed in `../DATA`: **22 archives, 5,675 marked DDS textures**. The installed client EXE and already-tested DLL were unchanged during this expansion. All archive output hashes were checked after copying. The pre-test enhanced archives and an installation manifest are in `../renderer_patch/test-backup/`; these are not the untouched original archives.
-
-`staging-renderer-pilot/ui-hud-audit.json` inventories all **330 original ACV indexes**. Its UI/HUD labels are filename heuristics, not a runtime coverage guarantee or a tagging whitelist. The oversized yellow spectator icon was traced to `texture/gui/방송국/관전아이콘.dds` in `009.acv` (32×32 native, 64×64 enhanced); it is now marked by the same shared mechanism.
-
-Receipt status intentionally remains `experimental-verified-repack-not-game-tested`: this records offline verification, not an unearned claim that every installed archive passed live testing.
-
-The original pilot used this historical command with verified ESRGAN output
-(no AI rerun). It is provenance, not a recipe for the current staged layout:
-
-```powershell
-.venv/Scripts/python.exe -B -m acv_tools.stage_renderer_pilot original-data/DATA/001.acv staging-esrgan-2x/001.acv staging-renderer-pilot/001.acv
-```
-
-The stager refuses existing output, source/receipt hash mismatches, unsupported DDS formats, and occupied reserved fields. The command above will therefore refuse the already-staged pilot rather than overwrite it.
 
 ## Controlled in-game tests and rollback
 
@@ -449,6 +412,6 @@ For DLL-only rollback, keep DATA unchanged and restore the recorded prior bundle
 For full native rollback, restore every changed archive **and loose image** from
 its verified backup before removing this shim/helper; enhanced assets without
 layout support are not a valid native baseline. Use the actual installation
-journal for the affected set, not the historical 22-archive pilot list. Preserve
+journal for the affected set, not an unrelated test's archive list. Preserve
 newer/generated user files and do not blindly copy an older backup over them.
 No EXE restoration is needed: this workflow never edits it.
