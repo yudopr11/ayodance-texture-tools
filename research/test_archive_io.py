@@ -18,8 +18,8 @@ from unicorn import (
     UC_HOOK_CODE,
     UC_HOOK_MEM_READ,
     UC_HOOK_MEM_WRITE,
-    UcError,
 )
+from unicorn.unicorn import UcError
 from unicorn.x86_const import (
     UC_X86_REG_EAX,
     UC_X86_REG_EBP,

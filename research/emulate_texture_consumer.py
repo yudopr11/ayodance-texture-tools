@@ -11,7 +11,8 @@ import json
 import struct
 from pathlib import Path
 
-from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_MODE_32, Uc
+from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_MODE_32
+from unicorn.unicorn import Uc
 from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_EIP, UC_X86_REG_ESP
 
 from acv_tools.acv_unpack import crypt, decode_entry, read_index

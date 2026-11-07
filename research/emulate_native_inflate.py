@@ -18,8 +18,8 @@ from unicorn import (
     UC_MODE_32,
     UC_PROT_READ,
     UC_PROT_WRITE,
-    Uc,
 )
+from unicorn.unicorn import Uc
 from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_EIP, UC_X86_REG_ESP
 
 from acv_tools.acv_unpack import crypt, decode_entry, read_index

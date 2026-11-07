@@ -89,10 +89,16 @@ evidence. Nothing should automatically install into the game directory.
 
 Ordinary extraction/repacking needs no Ghidra, emulator, dump or commercial tool.
 For research-only work, read [diagnostics](docs/diagnostics.md) and the
-[historical notes](docs/acv-research-history.md). Some scripts need `unicorn` and
-`pefile`; install them separately into the project environment. Native replay
-also needs the exact trusted recovered image and dependencies expected by that
-script; these artifacts are not supplied by the repository.
+[historical notes](docs/acv-research-history.md). Some scripts need optional
+emulator dependencies in the project environment:
+
+```powershell
+uv pip install --python .venv/Scripts/python.exe unicorn==2.1.4 pefile==2024.8.26
+```
+
+`pyrightconfig.json` selects this project's `.venv` for Python analysis. Native
+replay also needs the exact trusted recovered image and dependencies expected by
+that script; these artifacts are not supplied by the repository.
 
 Ghidra scripts live in `research/ghidra_scripts/`; obtain Ghidra and a compatible
 JDK separately. Preserve recovered evidence and paired Ghidra projects; ask before

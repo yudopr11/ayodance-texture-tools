@@ -8,7 +8,8 @@ import re
 import struct
 import unittest
 
-from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_MODE_32, Uc
+from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_MODE_32
+from unicorn.unicorn import Uc
 from unicorn.x86_const import (
     UC_X86_REG_EAX,
     UC_X86_REG_EBP,

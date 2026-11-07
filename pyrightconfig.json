@@ -1,3 +1,4 @@
 {
-  "extraPaths": ["diagnostics/python-re-libs"]
+  "venvPath": ".",
+  "venv": ".venv"
 }

@@ -54,7 +54,8 @@ def main():
         image = probe.run()
         (output / "image.bin").write_bytes(image)
         print(probe.reason)
-        assert probe.found, "Fatal report code was not observed; inspect this run instead of assuming the same failure"
+        if not probe.found:
+            raise RuntimeError("Fatal report code was not observed; inspect this run instead of assuming the same failure")
 
 
 if __name__ == "__main__":
