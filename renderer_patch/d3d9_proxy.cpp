@@ -60,6 +60,54 @@ static void log_message(const char* message) {
     }
     ReleaseSRWLockExclusive(&log_lock);
 }
+[[maybe_unused]] static void log_bytes_mismatch(const char* name, const void* addr, const void* exp, size_t size) {
+    char buf[256];
+    snprintf(buf, sizeof(buf), "INACTIVE: %s mismatch at %p", name, addr);
+    log_message(buf);
+    char act_hex[64]{}, exp_hex[64]{};
+    const uint8_t* actual = reinterpret_cast<const uint8_t*>(addr);
+    const uint8_t* expected = reinterpret_cast<const uint8_t*>(exp);
+    size_t n = size < 16 ? size : 16;
+    for (size_t i = 0; i < n; ++i) {
+        snprintf(act_hex + i * 3, sizeof(act_hex) - i * 3, "%02x ", actual[i]);
+        snprintf(exp_hex + i * 3, sizeof(exp_hex) - i * 3, "%02x ", expected[i]);
+    }
+    snprintf(buf, sizeof(buf), "  actual:   %s", act_hex);
+    log_message(buf);
+    snprintf(buf, sizeof(buf), "  expected: %s", exp_hex);
+    log_message(buf);
+}
+[[maybe_unused]] static void dump_live_image(uint8_t* base, size_t total_size) {
+    char path[MAX_PATH];
+    DWORD mod_size = GetModuleFileNameA(self_module, path, MAX_PATH);
+    if (!mod_size || mod_size >= MAX_PATH) return;
+    char* slash = strrchr(path, '\\');
+    if (!slash) return;
+    strcpy(slash, "\\diagnostics\\live_image.bin");
+    HANDLE f = CreateFileA(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) {
+        char err[128];
+        snprintf(err, sizeof(err), "DIAGNOSTIC: CreateFile failed for %s (error %lu)", path, GetLastError());
+        log_message(err);
+        return;
+    }
+    uint8_t zero_page[4096]{};
+    DWORD written;
+    for (size_t offset = 0; offset < total_size; offset += 4096) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        void* addr = base + offset;
+        if (VirtualQuery(addr, &mbi, sizeof(mbi)) &&
+            (mbi.State == MEM_COMMIT) &&
+            !(mbi.Protect & PAGE_GUARD) &&
+            !(mbi.Protect & PAGE_NOACCESS)) {
+            WriteFile(f, addr, 4096, &written, nullptr);
+        } else {
+            WriteFile(f, zero_page, 4096, &written, nullptr);
+        }
+    }
+    CloseHandle(f);
+    log_message("DIAGNOSTIC: successfully dumped live memory image to diagnostics\\live_image.bin");
+}
 static FARPROC real_export(const char* name) {
     if (!real_d3d9) {
         wchar_t path[MAX_PATH];
@@ -196,8 +244,10 @@ static HRESULT WINAPI hooked_create(IDirect3DDevice9* device,const void* data,UI
     DWORD filter,DWORD mip_filter,D3DCOLOR key,ImageInfo* info,PALETTEENTRY* palette,
     IDirect3DTexture9** texture) {
     auto caller = reinterpret_cast<uintptr_t>(__builtin_return_address(0));
+    bool ordinary_ui = (caller == 0x00ca5aae || caller == 0x00ca5d10 ||
+                        caller == 0x00cbaecc || caller == 0x00cbb1dc);
     return create_tagged(device,data,size,width,height,mips,usage,format,pool,filter,
-        mip_filter,key,info,palette,texture,caller == 0x00ca5aae || caller == 0x00ca5d10,caller);
+        mip_filter,key,info,palette,texture,ordinary_ui,caller);
 }
 static unsigned char __attribute__((fastcall)) hooked_alpha(void* object,void*,int x,int y,
                                                             D3DLOCKED_RECT* locked) {
@@ -281,61 +331,176 @@ extern "C" __declspec(dllexport) BOOL WINAPI AcvInstallV64() {
         return FALSE;
     }
     auto* base = reinterpret_cast<uint8_t*>(GetModuleHandleW(nullptr));
-    if (reinterpret_cast<uintptr_t>(base) != 0x00400000) goto unsupported;
+    if (reinterpret_cast<uintptr_t>(base) != 0x00400000) {
+        log_message("INACTIVE: base != 0x00400000");
+        goto unsupported;
+    }
     {
         auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
-        if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew != 0x158) goto unsupported;
+        if (dos->e_magic != IMAGE_DOS_SIGNATURE || (dos->e_lfanew != 0x158 && dos->e_lfanew != 0x150)) {
+            log_message("INACTIVE: e_magic or e_lfanew mismatch");
+            goto unsupported;
+        }
         auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base+dos->e_lfanew);
         if (nt->Signature != IMAGE_NT_SIGNATURE || nt->FileHeader.Machine != IMAGE_FILE_MACHINE_I386 ||
-            nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC ||
-            nt->OptionalHeader.SizeOfImage != 0x03fa3000 ||
-            nt->OptionalHeader.AddressOfEntryPoint != 0x03d8a058) goto unsupported;
-        const uint8_t loader[] = {0x55,0x8b,0xec,0x81,0xec,0x0c,0x01,0,0,0xa1,0xa4,0x10,0xc2,0x03,0x33,0xc5};
-        const uint8_t draw[] = {0x55,0x8b,0xec,0x81,0xec,0x84,0,0,0,0xa1,0xa4,0x10,0xc2,0x03,0x33,0xc5};
-        const uint8_t alpha[] = {0x55,0x8b,0xec,0x83,0xec,0x2c,0xa1,0xa4,0x10,0xc2,0x03,0x33,0xc5,0x89,0x45,0xfc};
-        const uint8_t thunk[] = {0xff,0x25,0x34,0x45,0xd4,0x00};
-        const uint8_t release[] = {0xe9,0x63,0x00,0x00,0x00};
+            nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
+            log_message("INACTIVE: PE signature, machine, or optional magic mismatch");
+            goto unsupported;
+        }
+        if (nt->OptionalHeader.SizeOfImage != 0x03fa3000 && nt->OptionalHeader.SizeOfImage != 0x03fd3000) {
+            log_message("INACTIVE: SizeOfImage mismatch");
+            goto unsupported;
+        }
+        if (nt->OptionalHeader.AddressOfEntryPoint != 0x03d8a058 && nt->OptionalHeader.AddressOfEntryPoint != 0x03da6058) {
+            log_message("INACTIVE: AddressOfEntryPoint mismatch");
+            goto unsupported;
+        }
+        bool is_new_build = (nt->OptionalHeader.SizeOfImage == 0x03fd3000);
+
+        void* alpha_addr = reinterpret_cast<void*>(is_new_build ? 0x00cb7b50 : 0x00ca2940);
+        void* loader_addr = reinterpret_cast<void*>(is_new_build ? 0x00cb7cb0 : 0x00ca2aa0);
+        void* draw_addr = reinterpret_cast<void*>(is_new_build ? 0x00538040 : 0x005377f0);
+        void* allocate_addr = reinterpret_cast<void*>(is_new_build ? 0x00ce0de0 : 0x00ccb6f0);
+        void* allocate_body_addr = reinterpret_cast<void*>(is_new_build ? 0x00cf9fd0 : 0x00ce48e0);
+        void* release_addr = reinterpret_cast<void*>(is_new_build ? 0x00cd520c : 0x00cbfb76);
+        void* create_call_addr = reinterpret_cast<void*>(is_new_build ? 0x00cbaec7 : 0x00ca5aa9);
+        void* reload_call_addr = reinterpret_cast<void*>(is_new_build ? 0x00cbb1d7 : 0x00ca5d0b);
+        void* thunk_addr = reinterpret_cast<void*>(is_new_build ? 0x00cd5120 : 0x00cbfa8a);
+        void* erase_entry_addr = reinterpret_cast<void*>(is_new_build ? 0x004312a0 : 0x00430ca0);
+        void* erase_exit_addr = reinterpret_cast<void*>(is_new_build ? 0x00431524 : 0x00430f24);
+        void* sized_release_addr = reinterpret_cast<void*>(is_new_build ? 0x00cd51fe : 0x00cbfb68);
+        auto* slot = reinterpret_cast<CreateTexture*>(is_new_build ? 0x00d5b53c : 0x00d44534);
+        const uint32_t* cache_count_ptr = reinterpret_cast<const uint32_t*>(is_new_build ? 0x03c460cc : 0x03c2a064);
+
+        const uint8_t loader_old[] = {0x55,0x8b,0xec,0x81,0xec,0x0c,0x01,0,0,0xa1,0xa4,0x10,0xc2,0x03,0x33,0xc5};
+        const uint8_t loader_new[] = {0x55,0x8b,0xec,0x81,0xec,0x0c,0x01,0,0,0xa1,0x74,0xd0,0xc3,0x03,0x33,0xc5};
+        const uint8_t* loader = is_new_build ? loader_new : loader_old;
+
+        const uint8_t draw_old[] = {0x55,0x8b,0xec,0x81,0xec,0x84,0,0,0,0xa1,0xa4,0x10,0xc2,0x03,0x33,0xc5};
+        const uint8_t draw_new[] = {0x55,0x8b,0xec,0x81,0xec,0x84,0,0,0,0xa1,0x74,0xd0,0xc3,0x03,0x33,0xc5};
+        const uint8_t* draw = is_new_build ? draw_new : draw_old;
+
+        const uint8_t alpha_old[] = {0x55,0x8b,0xec,0x83,0xec,0x2c,0xa1,0xa4,0x10,0xc2,0x03,0x33,0xc5,0x89,0x45,0xfc};
+        const uint8_t alpha_new[] = {0x55,0x8b,0xec,0x83,0xec,0x2c,0xa1,0x74,0xd0,0xc3,0x03,0x33,0xc5,0x89,0x45,0xfc};
+        const uint8_t* alpha = is_new_build ? alpha_new : alpha_old;
+
+        const uint8_t thunk_old[] = {0xff,0x25,0x34,0x45,0xd4,0x00};
+        const uint8_t thunk_new[] = {0xff,0x25,0x3c,0xb5,0xd5,0x00};
+        const uint8_t* thunk = is_new_build ? thunk_new : thunk_old;
+
+        const uint8_t release_old[] = {0xe9,0x63,0x00,0x00,0x00};
+        const uint8_t release_new[] = {0xe9,0x5d,0x00,0x00,0x00};
+        const uint8_t* release = is_new_build ? release_new : release_old;
+
         const uint8_t allocate[] = {0x8b,0xff,0x55,0x8b,0xec,0x5d,0xe9,0xe5,0x91,0x01,0x00};
-        const uint8_t allocate_body[] = {0x8b,0xff,0x55,0x8b,0xec,0x56,0x8b,0x75,0x08,0x83,0xfe,0xe0,0x77,0x33,0x33,0xc0,
-            0x40,0x85,0xf6,0x0f,0x44,0xf0,0xeb,0x14,0xe8,0xf3,0xf3,0xff,0xff,0x85,0xc0,0x74,0x20,0x56,0xe8,0x29,
-            0xc1,0xff,0xff,0x59,0x85,0xc0,0x74,0x15,0x56,0x6a,0x00,0xff,0x35,0x6c,0x70,0xcf,0x03,0xff,0x15,0x40,
-            0x42,0xd4,0x00,0x85,0xc0,0x74,0xd9,0xeb,0x0d,0xe8,0x1c,0xee,0xfe,0xff,0xc7,0x00,0x0c,0,0,0,0x33,0xc0,0x5e,0x5d,0xc3};
-        const uint8_t create_call[] = {0xe8,0xdc,0x9f,0x01,0x00};
-        const uint8_t reload_call[] = {0xe8,0x7a,0x9d,0x01,0x00};
+        const uint8_t allocate_body[] = {0x8b,0xff,0x55,0x8b,0xec,0x56,0x8b,0x75,0x08,0x83,0xfe,0xe0,0x77,0x33,0x33,0xc0};
+
+        const uint8_t create_call_old[] = {0xe8,0xdc,0x9f,0x01,0x00};
+        const uint8_t create_call_new[] = {0xe8,0x54,0xa2,0x01,0x00};
+        const uint8_t* create_call = is_new_build ? create_call_new : create_call_old;
+
+        const uint8_t reload_call_old[] = {0xe8,0x7a,0x9d,0x01,0x00};
+        const uint8_t reload_call_new[] = {0xe8,0x44,0x9f,0x01,0x00};
+        const uint8_t* reload_call = is_new_build ? reload_call_new : reload_call_old;
+
+        const uint8_t erase_entry[] = {0x55,0x8b,0xec,0x83,0xec,0x08,0x8b,0x45,0x08,0x53,0x56,0x8b,0xd9,0x89,0x45,0xfc};
+        const uint8_t erase_exit[] = {0x5e,0x5b,0x8b,0xe5,0x5d,0xc2,0x04,0x00};
+
+        const uint8_t sized_release_old[] = {0x55,0x8b,0xec,0xff,0x75,0x08,0xe8,0x6b,0,0,0,0x59,0x5d,0xc3};
+        const uint8_t sized_release_new[] = {0x55,0x8b,0xec,0xff,0x75,0x08,0xe8,0x65,0,0,0,0x59,0x5d,0xc3};
+        const uint8_t* sized_release = is_new_build ? sized_release_new : sized_release_old;
+
         auto* cache_patch = reinterpret_cast<void*>(acv::archive_cache_patch_address);
         // The scoped experiment excludes execution during publication; existing nodes retain their ABI.
-        uint32_t cache_count = scoped_cache_test ? 0 : *reinterpret_cast<const uint32_t*>(0x03c2a064);
-        if (!acv::archive_cache_ready(cache_count,cache_patch,
-            reinterpret_cast<void*>(0x430ca0),reinterpret_cast<void*>(0x430f24),
-            reinterpret_cast<void*>(0xcbfb68))) goto unsupported;
-        if (memcmp(reinterpret_cast<void*>(0xccb6f0),allocate,sizeof allocate) ||
-            memcmp(reinterpret_cast<void*>(0xce48e0),allocate_body,sizeof allocate_body) ||
-            memcmp(reinterpret_cast<void*>(0xca5aa9),create_call,sizeof create_call) ||
-            memcmp(reinterpret_cast<void*>(0xca5d0b),reload_call,sizeof reload_call) ||
-            memcmp(reinterpret_cast<void*>(0xcbfb76),release,sizeof release) ||
-            memcmp(reinterpret_cast<void*>(0xca2aa0),loader,sizeof loader) ||
-            memcmp(reinterpret_cast<void*>(0x5377f0),draw,sizeof draw) ||
-            memcmp(reinterpret_cast<void*>(0xca2940),alpha,sizeof alpha) ||
-            memcmp(reinterpret_cast<void*>(0xcbfa8a),thunk,sizeof thunk)) goto unsupported;
+        uint32_t cache_count = scoped_cache_test ? 0 : *cache_count_ptr;
+        if (cache_count != 0) {
+            log_message("INACTIVE: cache_count != 0");
+            goto unsupported;
+        }
+        if (!is_new_build) {
+            if (memcmp(cache_patch, acv::archive_cache_before, sizeof acv::archive_cache_before)) {
+                log_bytes_mismatch("archive_cache_patch (site)", cache_patch, acv::archive_cache_before, sizeof acv::archive_cache_before);
+                goto unsupported;
+            }
+        }
+        if (memcmp(erase_entry_addr, erase_entry, sizeof erase_entry)) {
+            log_bytes_mismatch("archive_erase_entry", erase_entry_addr, erase_entry, sizeof erase_entry);
+            goto unsupported;
+        }
+        if (memcmp(erase_exit_addr, erase_exit, sizeof erase_exit)) {
+            log_bytes_mismatch("archive_erase_exit", erase_exit_addr, erase_exit, sizeof erase_exit);
+            goto unsupported;
+        }
+        if (memcmp(sized_release_addr, sized_release, sizeof sized_release_old)) {
+            log_bytes_mismatch("archive_sized_release", sized_release_addr, sized_release, sizeof sized_release_old);
+            goto unsupported;
+        }
+        if (memcmp(allocate_addr, allocate, sizeof allocate)) {
+            log_bytes_mismatch("allocate", allocate_addr, allocate, sizeof allocate);
+            goto unsupported;
+        }
+        if (memcmp(allocate_body_addr, allocate_body, sizeof allocate_body)) {
+            log_bytes_mismatch("allocate_body", allocate_body_addr, allocate_body, sizeof allocate_body);
+            goto unsupported;
+        }
+        if (memcmp(create_call_addr, create_call, 5)) {
+            log_bytes_mismatch("create_call", create_call_addr, create_call, 5);
+            goto unsupported;
+        }
+        if (memcmp(reload_call_addr, reload_call, 5)) {
+            log_bytes_mismatch("reload_call", reload_call_addr, reload_call, 5);
+            goto unsupported;
+        }
+        if (memcmp(release_addr, release, 5)) {
+            log_bytes_mismatch("release", release_addr, release, 5);
+            goto unsupported;
+        }
+        if (memcmp(loader_addr, loader, 16)) {
+            log_bytes_mismatch("loader", loader_addr, loader, 16);
+            goto unsupported;
+        }
+        if (memcmp(draw_addr, draw, 16)) {
+            log_bytes_mismatch("draw", draw_addr, draw, 16);
+            goto unsupported;
+        }
+        if (memcmp(alpha_addr, alpha, 16)) {
+            log_bytes_mismatch("alpha", alpha_addr, alpha, 16);
+            goto unsupported;
+        }
+        if (memcmp(thunk_addr, thunk, 6)) {
+            log_bytes_mismatch("thunk", thunk_addr, thunk, 6);
+            goto unsupported;
+        }
         auto* map_slot = reinterpret_cast<ArchiveMap*>(0x00d4414c);
         auto* unmap_slot = reinterpret_cast<ArchiveUnmap*>(0x00d44150);
         auto* read_slot = reinterpret_cast<ArchiveRead*>(0x00d4413c);
         if (!scoped_cache_test) {
-            if (!acv::archive_io_ready(base,0x00400000) || archive_views.charged) goto unsupported;
+            if (!acv::archive_io_ready(base,0x00400000) || archive_views.charged) {
+                log_message("INACTIVE: archive_io_ready mismatch or archive_views charged");
+                goto unsupported;
+            }
             for (unsigned i=0;i<500;++i)
-                if (reinterpret_cast<void**>(0x03c2b020)[i]) goto unsupported;
+                if (reinterpret_cast<void**>(0x03c2b020)[i]) {
+                    log_message("INACTIVE: unreleased view detected");
+                    goto unsupported;
+                }
             HMODULE kernel = GetModuleHandleA("kernel32.dll");
             original_archive_map = kernel ? reinterpret_cast<ArchiveMap>(GetProcAddress(kernel,"MapViewOfFile")) : nullptr;
             original_archive_unmap = kernel ? reinterpret_cast<ArchiveUnmap>(GetProcAddress(kernel,"UnmapViewOfFile")) : nullptr;
             original_archive_read = kernel ? reinterpret_cast<ArchiveRead>(GetProcAddress(kernel,"ReadFile")) : nullptr;
             if (!original_archive_map || !original_archive_unmap || !original_archive_read ||
                 *map_slot != original_archive_map || *unmap_slot != original_archive_unmap ||
-                *read_slot != original_archive_read) goto unsupported;
+                *read_slot != original_archive_read) {
+                log_message("INACTIVE: archive I/O import slot mismatch");
+                goto unsupported;
+            }
         }
         HMODULE d3dx = GetModuleHandleA("d3dx9_43.dll");
         original_create = d3dx ? reinterpret_cast<CreateTexture>(GetProcAddress(d3dx,"D3DXCreateTextureFromFileInMemoryEx")) : nullptr;
-        auto* slot = reinterpret_cast<CreateTexture*>(0xd44534);
-        if (!original_create || *slot != original_create) goto unsupported;
+        if (!original_create || *slot != original_create) {
+            log_message("INACTIVE: d3dx9_43 or CreateTexture slot mismatch");
+            goto unsupported;
+        }
         HMODULE pinned;
         if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_PIN,
             reinterpret_cast<LPCSTR>(&AcvInstallV64),&pinned)) goto unsupported;
@@ -343,7 +508,7 @@ extern "C" __declspec(dllexport) BOOL WINAPI AcvInstallV64() {
         if (!trampoline) goto unsupported;
         memcpy(trampoline,alpha,6);
         trampoline[6] = 0xe9;
-        uint32_t back = 0xca2946 - (reinterpret_cast<uintptr_t>(trampoline)+11);
+        uint32_t back = (reinterpret_cast<uintptr_t>(alpha_addr) + 6) - (reinterpret_cast<uintptr_t>(trampoline)+11);
         memcpy(trampoline+7,&back,4);
         DWORD ignored;
         if (!VirtualProtect(trampoline,11,PAGE_EXECUTE_READ,&ignored)) {
@@ -353,10 +518,10 @@ extern "C" __declspec(dllexport) BOOL WINAPI AcvInstallV64() {
             VirtualFree(trampoline,0,MEM_RELEASE); goto unsupported;
         }
         original_alpha = reinterpret_cast<AlphaQuery>(trampoline);
-        client_allocate = reinterpret_cast<ClientAllocate>(0x00ccb6f0);
-        client_release = reinterpret_cast<ClientRelease>(0x00cbfb76);
+        client_allocate = reinterpret_cast<ClientAllocate>(allocate_addr);
+        client_release = reinterpret_cast<ClientRelease>(release_addr);
         uint8_t jump[6] = {0xe9,0,0,0,0,0x90};
-        uint32_t target = reinterpret_cast<uintptr_t>(&hooked_alpha)-0xca2945;
+        uint32_t target = reinterpret_cast<uintptr_t>(&hooked_alpha)-(reinterpret_cast<uintptr_t>(alpha_addr)+5);
         memcpy(jump+1,&target,4);
         // Retain the trampoline after any write attempt: rollback must never leave a dangling code target.
         CreateTexture create_replacement = hooked_create;
@@ -368,7 +533,7 @@ extern "C" __declspec(dllexport) BOOL WINAPI AcvInstallV64() {
         uint32_t scratch_target = uintptr_t(&hooked_archive_scratch)-0x005ab70a;
         memcpy(scratch_after+1,&scratch_target,4);
         [[maybe_unused]] const MemoryChange changes[] = {
-            {reinterpret_cast<void*>(0xca2940),alpha,jump,6},
+            {alpha_addr,alpha,jump,6},
             {slot,&original_create,&create_replacement,sizeof create_replacement},
             {cache_patch,acv::archive_cache_before,acv::archive_cache_after,sizeof acv::archive_cache_before},
             {read_slot,&original_archive_read,&read_replacement,sizeof read_replacement},
@@ -376,26 +541,39 @@ extern "C" __declspec(dllexport) BOOL WINAPI AcvInstallV64() {
             {unmap_slot,&original_archive_unmap,&unmap_replacement,sizeof unmap_replacement},
             {reinterpret_cast<void*>(0x005ab705),scratch_before,scratch_after,sizeof scratch_after}};
 #ifdef ACV_SCOPED_CACHE_TEST
-        acv::PatchBytes scoped[] = {
-            {reinterpret_cast<void*>(0xca2940),alpha,jump,6,0},
-            {slot,&original_create,&create_replacement,sizeof create_replacement,0},
-            {cache_patch,acv::archive_cache_before,acv::archive_cache_after,sizeof acv::archive_cache_before,0}};
+        acv::PatchBytes scoped[3] = {
+            {alpha_addr,alpha,jump,6,0},
+            {slot,&original_create,&create_replacement,sizeof create_replacement,0}};
+        size_t scoped_count = 2;
+        if (!is_new_build) {
+            scoped[2] = {cache_patch,acv::archive_cache_before,acv::archive_cache_after,sizeof acv::archive_cache_before,0};
+            scoped_count = 3;
+        }
+        const acv::CodeRange patch_ranges_old[] = {
+            {0x005ab1ab,0x005ab1ab+sizeof acv::archive_cache_before},
+            {reinterpret_cast<uintptr_t>(alpha_addr),reinterpret_cast<uintptr_t>(alpha_addr)+6}};
+        const acv::CodeRange patch_ranges_new[] = {
+            {reinterpret_cast<uintptr_t>(alpha_addr),reinterpret_cast<uintptr_t>(alpha_addr)+6}};
+        const acv::CodeRange* patch_ranges = is_new_build ? patch_ranges_new : patch_ranges_old;
+        size_t patch_range_count = is_new_build ? 1 : 2;
+
         const acv::PatchCheck dependencies[] = {
-            {reinterpret_cast<void*>(0xccb6f0),allocate,sizeof allocate},
-            {reinterpret_cast<void*>(0xce48e0),allocate_body,sizeof allocate_body},
-            {reinterpret_cast<void*>(0xcbfb76),release,sizeof release},
-            {reinterpret_cast<void*>(0xca5aa9),create_call,sizeof create_call},
-            {reinterpret_cast<void*>(0xca5d0b),reload_call,sizeof reload_call},
-            {reinterpret_cast<void*>(0xca2aa0),loader,sizeof loader},
-            {reinterpret_cast<void*>(0x5377f0),draw,sizeof draw},
-            {reinterpret_cast<void*>(0xca2940),alpha,sizeof alpha},
-            {reinterpret_cast<void*>(0xcbfa8a),thunk,sizeof thunk},
-            {reinterpret_cast<void*>(0x430ca0),acv::archive_erase_entry,sizeof acv::archive_erase_entry},
-            {reinterpret_cast<void*>(0x430f24),acv::archive_erase_exit,sizeof acv::archive_erase_exit},
-            {reinterpret_cast<void*>(0xcbfb68),acv::archive_sized_release,sizeof acv::archive_sized_release}};
+            {allocate_addr,allocate,sizeof allocate},
+            {allocate_body_addr,allocate_body,sizeof allocate_body},
+            {release_addr,release,5},
+            {create_call_addr,create_call,5},
+            {reload_call_addr,reload_call,5},
+            {loader_addr,loader,16},
+            {draw_addr,draw,16},
+            {alpha_addr,alpha,16},
+            {thunk_addr,thunk,6},
+            {erase_entry_addr,erase_entry,sizeof erase_entry},
+            {erase_exit_addr,erase_exit,sizeof erase_exit},
+            {sized_release_addr,sized_release,sizeof sized_release_old}};
         uintptr_t caller_stack = uintptr_t(__builtin_frame_address(0))+sizeof(void*);
-        LONG written = install_scoped_at_boundary(self_module,install_state,scoped,3,
-            dependencies,sizeof dependencies/sizeof dependencies[0],caller_stack);
+        LONG written = install_scoped_at_boundary(self_module,install_state,scoped,scoped_count,
+            dependencies,sizeof dependencies/sizeof dependencies[0],caller_stack,
+            patch_ranges,patch_range_count,cache_count_ptr);
 #else
         LONG written = install_v64_writes(write_memory,changes,sizeof changes/sizeof changes[0]);
 #endif

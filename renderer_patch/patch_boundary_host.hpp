@@ -16,15 +16,15 @@ struct PatchRequest {
     DWORD thread;
     bool acknowledged;
     LONG result;
+    const acv::CodeRange* patch_code;
+    size_t patch_code_count;
+    const uint32_t* cache_count_ptr;
 };
 static PatchRequest* pending_patch;
-static const acv::CodeRange patch_code[] = {
-    {0x005ab1ab,0x005ab1ab+sizeof acv::archive_cache_before},
-    {0x00ca2940,0x00ca2946}};
 static bool commit_scoped_patch(void* context) {
     auto* request = static_cast<PatchRequest*>(context);
     // Recheck under exclusion; pre-graphics sound opens may have populated the cache.
-    if (*reinterpret_cast<const uint32_t*>(0x03c2a064) > 12) return false;
+    if (request->cache_count_ptr && *request->cache_count_ptr > 12) return false;
     acv::PatchWindows api;
     request->result = acv::publish_patches(api,request->changes,request->count,request->checks,request->check_count);
     if (request->result == -2) {
@@ -41,13 +41,14 @@ extern "C" __declspec(dllexport) BOOL WINAPI AcvCommitAtLoaderBoundary(HMODULE b
     request->acknowledged = true;
     // Start at the installer's caller, excluding its prepared target pointers from the scan.
     auto* tib = reinterpret_cast<NT_TIB*>(NtCurrentTeb());
-    if (!acv::stack_outside_code(request->caller_stack,uintptr_t(tib->StackBase),patch_code,2)) return FALSE;
+    if (!acv::stack_outside_code(request->caller_stack,uintptr_t(tib->StackBase),request->patch_code,request->patch_code_count)) return FALSE;
     DWORD error;
-    return acv::with_threads_frozen(request->next,request->query,patch_code,2,commit_scoped_patch,request,error);
+    return acv::with_threads_frozen(request->next,request->query,request->patch_code,request->patch_code_count,commit_scoped_patch,request,error);
 }
 static LONG install_scoped_at_boundary(HMODULE self_module,volatile LONG& state,
     acv::PatchBytes* changes,size_t count,const acv::PatchCheck* checks,size_t check_count,
-    uintptr_t caller_stack) {
+    uintptr_t caller_stack,const acv::CodeRange* patch_code,size_t patch_code_count,
+    const uint32_t* cache_count_ptr) {
     HMODULE native = GetModuleHandleW(L"ntdll.dll");
     auto next = native ? reinterpret_cast<acv::NextThread>(GetProcAddress(native,"NtGetNextThread")) : nullptr;
     auto query = native ? reinterpret_cast<acv::QueryThread>(GetProcAddress(native,"NtQueryInformationThread")) : nullptr;
@@ -60,7 +61,8 @@ static LONG install_scoped_at_boundary(HMODULE self_module,volatile LONG& state,
     memcpy(slash,suffix,sizeof suffix);
     // A previously loaded helper would not execute PROCESS_ATTACH again.
     if (GetModuleHandleW(path)) return -1;
-    PatchRequest request{changes,count,next,query,checks,check_count,&state,caller_stack,GetCurrentThreadId(),false,-1};
+    PatchRequest request{changes,count,next,query,checks,check_count,&state,caller_stack,GetCurrentThreadId(),false,-1,
+        patch_code,patch_code_count,cache_count_ptr};
     pending_patch = &request;
     HMODULE helper = LoadLibraryExW(path,nullptr,LOAD_WITH_ALTERED_SEARCH_PATH);
     pending_patch = nullptr;
