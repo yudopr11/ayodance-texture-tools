@@ -88,5 +88,57 @@ int main() {
     acv::put32(volume+24,2); assert(!acv::upload_size(volume,sizeof volume));
     acv::put32(volume+24,1); acv::put32(volume+112,0x200200);
     assert(!acv::upload_size(volume,sizeof volume));
+
+    // Exhaustively verify optimized build_alpha matches alpha_at reference across all formats & scales.
+    auto reference_build = [](uint8_t* out, const acv::Tag& t, const uint8_t* src,
+                              size_t pitch, uint32_t fmt, uint32_t aw, uint32_t ah) {
+        for (uint32_t y = 0; y < t.logical_height; ++y) {
+            uint32_t top = uint64_t(y) * ah / t.logical_height;
+            uint32_t bottom = (uint64_t(y + 1) * ah + t.logical_height - 1) / t.logical_height;
+            for (uint32_t x = 0; x < t.logical_width; ++x) {
+                uint32_t left = uint64_t(x) * aw / t.logical_width;
+                uint32_t right = (uint64_t(x + 1) * aw + t.logical_width - 1) / t.logical_width;
+                uint8_t maximum = 0;
+                for (uint32_t py = top; py < bottom; ++py)
+                    for (uint32_t px = left; px < right; ++px) {
+                        uint8_t a = acv::alpha_at(src, pitch, fmt, px, py);
+                        if (a > maximum) maximum = a;
+                    }
+                out[size_t(y) * t.logical_width + x] = maximum;
+            }
+        }
+    };
+    const uint32_t formats[] = {
+        20, 21, 22, 23, 24, 25, 26, 28, 30, 32, 33,
+        0x31545844, 0x33545844, 0x35545844
+    };
+    struct SizeCase { uint32_t lw, lh, pw, ph; };
+    const SizeCase cases[] = {
+        {1, 1, 2, 2}, {3, 3, 6, 6}, {5, 7, 10, 14}, {16, 12, 32, 24},
+        {7, 5, 12, 9}, {300, 3, 600, 5}
+    };
+    static uint8_t buf[65536];
+    static uint8_t got[4096], want[4096];
+    uint32_t seed = 0x12345678u;
+    for (size_t i = 0; i < sizeof buf; ++i) {
+        seed = seed * 1664525u + 1013904223u;
+        buf[i] = uint8_t(seed >> 24);
+    }
+    for (uint32_t fmt : formats) {
+        for (const auto& c : cases) {
+            acv::Tag t = {{'A','C','V','U','I','2','X',0}, 1, c.lw, c.lh, c.pw, c.ph};
+            bool compressed = fmt == 0x31545844 || fmt == 0x33545844 || fmt == 0x35545844;
+            size_t min_p = acv::minimum_pitch(c.pw, fmt);
+            size_t pitch = min_p + 13; // Non-aligned padded pitch
+            size_t rows = compressed ? ((c.ph + 3) / 4) : c.ph;
+            assert(pitch * rows <= sizeof buf);
+            assert(size_t(c.lw) * c.lh <= sizeof got);
+            memset(got, 0xcc, size_t(c.lw) * c.lh);
+            memset(want, 0xdd, size_t(c.lw) * c.lh);
+            assert(acv::build_alpha(got, t, buf, pitch, fmt, c.pw, c.ph));
+            reference_build(want, t, buf, pitch, fmt, c.pw, c.ph);
+            assert(memcmp(got, want, size_t(c.lw) * c.lh) == 0);
+        }
+    }
     puts("DDS v1/v2 tags, palette/volume upload normalization and logical alpha checks passed");
 }

@@ -4,13 +4,94 @@ Derived from recovered native functions 005aa1a0, 00cb5620, 00cb7700,
 00c3a1c0, 00c39260. No game image or runtime is required.
 """
 
+import ctypes
+import os
 import struct
+import threading
 from functools import lru_cache
+from pathlib import Path
 
 from Crypto.Cipher import Blowfish
 from py3rijndael import Rijndael
 
 MASK = 0xffffffff
+_NATIVE_ABI_VERSION = 1
+
+
+def _native_library_path():
+    directory = Path(__file__).resolve().parent
+    if os.name == "nt":
+        return directory / "_acv_crypto_native.dll"
+    if os.uname().sysname == "Darwin":
+        return directory / "_acv_crypto_native.dylib"
+    return directory / "_acv_crypto_native.so"
+
+
+def _load_native():
+    if os.environ.get("ACV_DISABLE_NATIVE_CRYPTO") == "1":
+        return None
+    path = _native_library_path()
+    if not path.is_file():
+        return None
+    try:
+        lib = ctypes.CDLL(str(path))
+        lib.acv_crypto_abi_version.argtypes = []
+        lib.acv_crypto_abi_version.restype = ctypes.c_uint32
+        if lib.acv_crypto_abi_version() != _NATIVE_ABI_VERSION:
+            return None
+        lib.acv_crypto_init.argtypes = []
+        lib.acv_crypto_init.restype = None
+        lib.acv_blowfish_init.argtypes = [
+            ctypes.c_uint32,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.POINTER(ctypes.c_uint32),
+            ctypes.POINTER(ctypes.c_uint32),
+            ctypes.POINTER(ctypes.c_uint32),
+        ]
+        lib.acv_blowfish_init.restype = ctypes.c_int
+        lib.acv_blowfish_ecb.argtypes = [
+            ctypes.POINTER(ctypes.c_uint32),
+            ctypes.POINTER(ctypes.c_uint32),
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+        ]
+        lib.acv_blowfish_ecb.restype = ctypes.c_int
+        lib.acv_rijndael256_init.argtypes = [
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_uint32),
+            ctypes.POINTER(ctypes.c_uint32),
+        ]
+        lib.acv_rijndael256_init.restype = ctypes.c_int
+        lib.acv_rijndael256_cbc_encrypt.argtypes = [
+            ctypes.POINTER(ctypes.c_uint32),
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+        ]
+        lib.acv_rijndael256_cbc_encrypt.restype = ctypes.c_int
+        lib.acv_rijndael256_cbc_decrypt.argtypes = [
+            ctypes.POINTER(ctypes.c_uint32),
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+        ]
+        lib.acv_rijndael256_cbc_decrypt.restype = ctypes.c_int
+        lib.acv_crypto_init()
+        return lib
+    except (OSError, AttributeError):
+        return None
+
+
+_NATIVE = _load_native()
+_LEGACY_BLOWFISH_LOCAL = threading.local()
+
+
+def has_native_crypto():
+    return _NATIVE is not None
 
 
 class MT19937:
@@ -113,11 +194,25 @@ def archive_tables(tag):
 
 
 class ArchiveBlowfish:
-    def __init__(self, key, tag):
+    def __init__(self, key, tag, *, use_native=True):
         if not 1 <= len(key) <= 56:
             raise ValueError("Blowfish key must contain 1..56 bytes")
+        key_bytes = key if isinstance(key, bytes) else bytes(key)
+        self._native = _NATIVE if use_native else None
+        if self._native is not None:
+            self._p_enc = (ctypes.c_uint32 * 18)()
+            self._p_dec = (ctypes.c_uint32 * 18)()
+            self._s = (ctypes.c_uint32 * 1024)()
+            status = self._native.acv_blowfish_init(
+                tag & MASK, key_bytes, len(key_bytes), self._p_enc, self._p_dec, self._s
+            )
+            if status != 0:
+                raise ValueError("Native ArchiveBlowfish initialization failed")
+            self.p = list(self._p_enc)
+            self.s = list(self._s)
+            return
         self.p, self.s = archive_tables(tag)
-        expanded = (key * ((72 + len(key) - 1) // len(key)))[:72]
+        expanded = (key_bytes * ((72 + len(key_bytes) - 1) // len(key_bytes)))[:72]
         self.p = [word ^ part for word, part in zip(self.p, struct.unpack(">18I", expanded), strict=True)]
         left = right = 0
         for table in (self.p, self.s):
@@ -140,14 +235,55 @@ class ArchiveBlowfish:
         return left, right
 
     def crypt(self, data, *, decrypt):
-        if len(data) % 8:
+        size = len(data)
+        if size % 8:
             raise ValueError("Blowfish input is not block aligned")
+        if size == 0:
+            return b""
+        if self._native is not None:
+            src = data if isinstance(data, bytes) else bytes(data)
+            dst = ctypes.create_string_buffer(size)
+            rounds = self._p_dec if decrypt else self._p_enc
+            status = self._native.acv_blowfish_ecb(rounds, self._s, src, dst, size)
+            if status != 0:
+                raise ValueError("Native ArchiveBlowfish crypt failed")
+            return dst.raw
         rounds = self.p[::-1] if decrypt else self.p
-        result = bytearray(len(data))
-        for offset in range(0, len(data), 8):
+        result = bytearray(size)
+        for offset in range(0, size, 8):
             left, right = self.block(*struct.unpack_from(">2I", data, offset), rounds)
             struct.pack_into(">2I", result, offset, left, right)
         return bytes(result)
+
+
+class _NativeRijndael256:
+    def __init__(self, key):
+        if len(key) != 32:
+            raise ValueError("Rijndael-256 key must be 32 bytes")
+        key_bytes = key if isinstance(key, bytes) else bytes(key)
+        self._native = _NATIVE
+        self._ke = (ctypes.c_uint32 * 120)()
+        self._kd = (ctypes.c_uint32 * 120)()
+        status = self._native.acv_rijndael256_init(key_bytes, self._ke, self._kd)
+        if status != 0:
+            raise ValueError("Native Rijndael-256 initialization failed")
+
+    def crypt_cbc(self, data, iv, *, decrypt):
+        size = len(data)
+        if len(iv) != 32 or size % 32:
+            raise ValueError("Invalid Rijndael IV or block alignment")
+        if size == 0:
+            return b""
+        src = data if isinstance(data, bytes) else bytes(data)
+        iv_bytes = iv if isinstance(iv, bytes) else bytes(iv)
+        dst = ctypes.create_string_buffer(size)
+        if decrypt:
+            status = self._native.acv_rijndael256_cbc_decrypt(self._kd, iv_bytes, src, dst, size)
+        else:
+            status = self._native.acv_rijndael256_cbc_encrypt(self._ke, iv_bytes, src, dst, size)
+        if status != 0:
+            raise ValueError("Native Rijndael-256 CBC crypt failed")
+        return dst.raw
 
 
 BLOWFISH_PAYLOAD_KEY = bytes.fromhex("b5a5c0ccc5b8c6c4c0cf20bfa3c5a9b8b3c6ae2fb5f0c5a9b8b3c6ae20c5b0")
@@ -174,6 +310,24 @@ def rijndael_cipher(key):
     return Rijndael(key, block_size=32)
 
 
+@lru_cache(maxsize=4)
+def _native_rijndael_cipher(key):
+    return _NativeRijndael256(key)
+
+
+def _legacy_blowfish_cipher(key):
+    cache = getattr(_LEGACY_BLOWFISH_LOCAL, "ciphers", None)
+    if cache is None:
+        cache = {}
+        _LEGACY_BLOWFISH_LOCAL.ciphers = cache
+    cipher = cache.get(key)
+    if cipher is None:
+        # Required by the legacy file format, not for protecting new secrets.
+        cipher = Blowfish.new(key, Blowfish.MODE_ECB)  # noqa: S304  # nosec B304
+        cache[key] = cipher
+    return cipher
+
+
 def crypt(data, tag, *, header=False, decrypt=True, iv=None):
     variant = (tag >> 16) & 255
     if tag >> 24 != 255 or variant not in HEADER_KEYS or (tag & 65535) >= 500:
@@ -183,6 +337,8 @@ def crypt(data, tag, *, header=False, decrypt=True, iv=None):
         previous = RIJNDAEL_IV if iv is None else iv
         if len(previous) != 32 or len(data) % 32:
             raise ValueError("Invalid Rijndael IV or block alignment")
+        if _NATIVE is not None:
+            return _native_rijndael_cipher(key).crypt_cbc(data, previous, decrypt=decrypt)
         cipher = rijndael_cipher(key)
         output = bytearray()
         for offset in range(0, len(data), 32):
@@ -199,8 +355,7 @@ def crypt(data, tag, *, header=False, decrypt=True, iv=None):
     if len(data) % 8:
         raise ValueError("Invalid Blowfish block alignment")
     if variant in (1, 2):
-        # Required by the legacy file format, not for protecting new secrets.
-        cipher = Blowfish.new(key, Blowfish.MODE_ECB)  # noqa: S304  # nosec B304
+        cipher = _legacy_blowfish_cipher(key)
         return cipher.decrypt(data) if decrypt else cipher.encrypt(data)
     return blowfish_cipher(key, tag).crypt(data, decrypt=decrypt)
 
@@ -213,7 +368,13 @@ def self_test():
     cipher = ArchiveBlowfish(bytes(range(56)), 0xff050002)
     data = bytes(range(64))
     assert cipher.crypt(cipher.crypt(data, decrypt=False), decrypt=True) == data
-    print("ACV crypto self-check passed: canonical MT outputs, complete permutations, custom cipher roundtrip.")
+    if _NATIVE is not None:
+        reference = ArchiveBlowfish(bytes(range(56)), 0xff050002, use_native=False)
+        assert cipher.p == reference.p and cipher.s == reference.s
+        assert cipher.crypt(data, decrypt=False) == reference.crypt(data, decrypt=False)
+        assert cipher.crypt(data, decrypt=True) == reference.crypt(data, decrypt=True)
+    backend = "native C" if _NATIVE is not None else "pure Python"
+    print(f"ACV crypto self-check passed ({backend}): canonical MT outputs, complete permutations, custom cipher roundtrip.")
 
 
 if __name__ == "__main__":

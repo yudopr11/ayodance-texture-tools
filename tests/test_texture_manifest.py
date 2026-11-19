@@ -276,6 +276,29 @@ class ManifestTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     stage_update(source, root / 'escape', manifest, root / 'texconv', root / 'model.onnx')
 
+    def test_parallel_capture_matches_serial(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            originals, staged = root / 'original', root / 'staged'
+            originals.mkdir()
+            staged.mkdir()
+            source = originals / '001.acv'
+            items = [(f'tex/item_{i:02d}.dds', tiny_dds()) for i in range(12)]
+            items.insert(5, ('data/opaque.bin', b'opaque-payload'))
+            archive(source, items)
+
+            def resize(raw, src, destination, *args):
+                destination.mkdir(exist_ok=True)
+                (destination / src.name).write_bytes(enlarged())
+                return True
+
+            with patch('acv_tools.acv_upscale.resize_dds', side_effect=resize):
+                process(source, staged, root / 'texconv', pipeline='test-pipeline', model=root / 'model.onnx')
+            serial = capture(source, staged, workers=1)
+            parallel = capture(source, staged, workers=4)
+            self.assertEqual(serial, parallel)
+            self.assertEqual(len(parallel['textures']), 12)
+
 
 if __name__ == '__main__':
     unittest.main()

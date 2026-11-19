@@ -3,18 +3,35 @@
 import argparse
 import hashlib
 import json
+import os
 import struct
 import sys
 import zlib
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PureWindowsPath
 
 from .acv_crypto import MT19937, crypt, permutation
 
 MAX_RAW = 64 * 1024 * 1024
+_IO_BUFFER = 1024 * 1024
+_MAX_INFLIGHT_BYTES = 64 * 1024 * 1024
+_FORBIDDEN_CHARS = frozenset('<>:"|?*')
+_WINDOWS_RESERVED = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
 
 
 class UnsupportedFormat(ValueError):
     pass
+
+
+def _default_workers(entry_count):
+    if entry_count < 8:
+        return 1
+    return min(8, os.cpu_count() or 1)
 
 
 def read_index(stream):
@@ -48,18 +65,21 @@ def read_index(stream):
         raise ValueError("Invalid ACV index size")
     entries = []
     expected_offset = 0
+    unpack_4i = struct.Struct("<4I").unpack_from
+    unpack_1i = struct.Struct("<I").unpack_from
     for i in range(count):
-        record = index[i * width:(i + 1) * width]
-        name, separator, _ = record[:160].partition(b"\0")
-        if not name or not separator:
+        pos = i * width
+        nul = index.find(b"\0", pos, pos + 160)
+        if nul <= pos:
             raise ValueError(f"Invalid filename in record {i}")
-        metadata, packed_size, raw_size, offset = struct.unpack_from("<4I", record, 160)
+        name = index[pos:nul]
+        metadata, packed_size, raw_size, offset = unpack_4i(index, pos + 160)
         if offset != expected_offset or base + offset + packed_size > size:
             raise ValueError(f"Invalid payload range in record {i}")
         if max(packed_size, raw_size) > MAX_RAW:
             raise ValueError(f"Entry {i} exceeds the {MAX_RAW}-byte safety limit")
-        entry_tag = struct.unpack_from("<I", record, 176)[0] if width >= 180 else 0
-        iv = record[180:212] if width == 212 else None
+        entry_tag = unpack_1i(index, pos + 176)[0] if width >= 180 else 0
+        iv = index[pos + 180:pos + 212] if width == 212 else None
         entries.append((name.decode("cp949", errors="surrogateescape"), metadata, packed_size, raw_size, base + offset, entry_tag, iv))
         expected_offset = offset + packed_size
     if base + expected_offset != size:
@@ -139,36 +159,46 @@ def inflate_checked(packed, raw_size, alignment=1):
     return raw
 
 
-def decode_entry(stream, entry):
-    name, _, packed_size, raw_size, offset, tag, iv = entry
-    stream.seek(offset)
-    packed = stream.read(packed_size)
-    if len(packed) != packed_size:
-        raise ValueError(f"Truncated payload: {name}")
+def decode_payload(packed, raw_size, tag, iv):
     if tag:
         packed = crypt(packed, tag, iv=iv)
     return inflate_checked(packed, raw_size, (32 if iv is not None else 8) if tag else 1)
 
 
+def decode_entry(stream, entry):
+    name, _, packed_size, raw_size, offset, tag, iv = entry
+    if stream.tell() != offset:
+        stream.seek(offset)
+    packed = stream.read(packed_size)
+    if len(packed) != packed_size:
+        raise ValueError(f"Truncated payload: {name}")
+    return decode_payload(packed, raw_size, tag, iv)
+
+
 def safe_relative_path(name):
-    path = PureWindowsPath(name)
     parts = name.replace("\\", "/").split("/")
-    if path.drive or path.root or any(p in ("", ".", "..") for p in parts):
+    if not parts or any(p in ("", ".", "..") for p in parts):
         raise ValueError(f"Unsafe archive path: {name!r}")
     for part in parts:
-        if (part.endswith((" ", ".")) or any(ord(c) < 32 or c in '<>:"|?*' for c in part)
-                or PureWindowsPath(part).is_reserved()):
+        if part[-1] in (" ", ".") or any(ord(c) < 32 or c in _FORBIDDEN_CHARS for c in part):
+            raise ValueError(f"Unsafe archive path: {name!r}")
+        stem = part.partition(".")[0].rstrip(" ")
+        if stem.upper() in _WINDOWS_RESERVED or (not part.isascii() and PureWindowsPath(part).is_reserved()):
             raise ValueError(f"Unsafe archive path: {name!r}")
     return Path(*parts)
 
 
-def process_archive(source, output=None, textures_only=False):
-    with source.open("rb") as stream:
+def process_archive(source, output=None, textures_only=False, workers=None):
+    if workers is not None and workers < 1:
+        raise ValueError("Worker count must be positive")
+    with source.open("rb", buffering=_IO_BUFFER) as stream:
         entries = read_index(stream)
         total_entries = len(entries)
         if textures_only:
             entries = [entry for entry in entries if entry[0].lower().endswith(".dds")]
         paths = []
+        output_resolved = None
+        created_dirs = set()
         if output is not None:
             paths = [safe_relative_path(entry[0]) for entry in entries]
             keys = {p.as_posix().casefold() for p in paths}
@@ -178,23 +208,64 @@ def process_archive(source, output=None, textures_only=False):
                 if any(p.as_posix().casefold() in keys for p in path.parents if p != Path(".")):
                     raise ValueError("File/directory path collision")
             output.mkdir(parents=True, exist_ok=False)
+            output_resolved = output.resolve()
+            created_dirs.add(output)
         total = 0
         dds = 0
         digest = hashlib.sha256()
-        for i, entry in enumerate(entries):
-            raw = decode_entry(stream, entry)
-            digest.update(struct.pack("<I", len(raw)))
+        pack_u32 = struct.Struct("<I").pack
+
+        def handle_decoded(index, entry, raw):
+            nonlocal total, dds
+            digest.update(pack_u32(len(raw)))
             digest.update(raw)
             total += len(raw)
             dds += entry[0].lower().endswith(".dds")
             if output is not None:
-                target = output / paths[i]
-                target.parent.mkdir(parents=True, exist_ok=True)
+                target = output / paths[index]
+                parent = target.parent
+                if parent not in created_dirs:
+                    parent.mkdir(parents=True, exist_ok=True)
+                    created_dirs.add(parent)
                 # Reject pre-existing links, including directories introduced during extraction.
-                if not target.resolve().is_relative_to(output.resolve()):
+                if not target.resolve().is_relative_to(output_resolved):
                     raise ValueError(f"Output path escapes destination: {entry[0]}")
                 with target.open("xb") as destination:
                     destination.write(raw)
+
+        thread_count = _default_workers(len(entries)) if workers is None else min(workers, max(1, len(entries)))
+        if thread_count <= 1:
+            for i, entry in enumerate(entries):
+                handle_decoded(i, entry, decode_entry(stream, entry))
+        else:
+            max_in_flight = thread_count * 2
+            pending = deque()
+            pending_bytes = 0
+            with ThreadPoolExecutor(max_workers=thread_count) as pool:
+                try:
+                    for i, entry in enumerate(entries):
+                        name, _, packed_size, raw_size, offset, tag, iv = entry
+                        if stream.tell() != offset:
+                            stream.seek(offset)
+                        packed = stream.read(packed_size)
+                        if len(packed) != packed_size:
+                            raise ValueError(f"Truncated payload: {name}")
+                        est_bytes = packed_size + raw_size
+                        while pending and (len(pending) >= max_in_flight or pending_bytes + est_bytes > _MAX_INFLIGHT_BYTES):
+                            done_i, done_entry, done_est, future = pending.popleft()
+                            pending_bytes -= done_est
+                            handle_decoded(done_i, done_entry, future.result())
+                        future = pool.submit(decode_payload, packed, raw_size, tag, iv)
+                        pending.append((i, entry, est_bytes, future))
+                        pending_bytes += est_bytes
+                    while pending:
+                        done_i, done_entry, done_est, future = pending.popleft()
+                        pending_bytes -= done_est
+                        handle_decoded(done_i, done_entry, future.result())
+                except BaseException:
+                    for _, _, _, future in pending:
+                        future.cancel()
+                    raise
         return {"entries": len(entries), "total_entries": total_entries, "dds_entries": dds, "raw_bytes": total,
                 "decoded_stream_sha256": digest.hexdigest()}
 
@@ -204,7 +275,10 @@ def main():
     parser.add_argument("source", type=Path, help="One ACV or directory of ACVs")
     parser.add_argument("--output", type=Path, help="Extract into new per-archive folders; omitted = verify only")
     parser.add_argument("--textures-only", action="store_true", help="Extract/verify only DDS textures; omit non-texture and decoy records")
+    parser.add_argument("--workers", type=int, default=None, help="Worker threads per archive (default: auto)")
     args = parser.parse_args()
+    if args.workers is not None and args.workers < 1:
+        parser.error("Worker count must be positive")
     sources = sorted(args.source.glob("*.acv")) if args.source.is_dir() else [args.source]
     if not sources:
         parser.error("No ACV files found")
@@ -212,7 +286,7 @@ def main():
     for source in sources:
         output = args.output / source.stem if args.output is not None else None
         try:
-            details = process_archive(source, output, args.textures_only)
+            details = process_archive(source, output, args.textures_only, workers=args.workers)
             result = {"archive": str(source), "status": "extracted" if output else "verified", **details}
         except UnsupportedFormat as error:
             result = {"archive": str(source), "status": "unsupported", "error": str(error)}
