@@ -135,8 +135,14 @@ static HRESULT create_tagged(IDirect3DDevice9* device,const void* data,UINT size
     D3DCAPS9 caps{};
     HRESULT caps_hr = E_PENDING;
     D3DSURFACE_DESC desc{};
+    bool crc_ready = false;
+    uint32_t crc_value = 0;
     auto report = [&](const char* stage,HRESULT hr) {
         if (!trace_textures && SUCCEEDED(hr)) return;
+        if (!crc_ready) {
+            crc_value = acv::trace_crc32(input,sample_size);
+            crc_ready = true;
+        }
         MEMORYSTATUSEX memory{};
         memory.dwLength = sizeof memory;
         BOOL memory_ok = GlobalMemoryStatusEx(&memory);
@@ -150,7 +156,7 @@ static HRESULT create_tagged(IDirect3DDevice9* device,const void* data,UINT size
             "upload_bytes=%u upload_format=%u upload_mips=%u caps_hr=0x%08lx max=%ux%u "
             "actual=%ux%u actual_format=%u actual_pool=%u actual_mips=%u mem_ok=%u avail_virtual=%llu avail_phys=%llu",
             sequence,stage,static_cast<unsigned long>(hr),static_cast<unsigned long>(caller),unsigned(ordinary_ui),
-            input_size,sample_size,acv::trace_crc32(input,sample_size),tag.version,
+            input_size,sample_size,crc_value,tag.version,
             tag.logical_width,tag.logical_height,tag.physical_width,tag.physical_height,
             acv::u32(header+80),acv::u32(header+84),acv::u32(header+88),acv::u32(header+28),
             width,height,mips,unsigned(requested_format),unsigned(pool),usage,filter,mip_filter,color_key,
@@ -187,16 +193,17 @@ static HRESULT create_tagged(IDirect3DDevice9* device,const void* data,UINT size
     ImageInfo* output_info = &temporary;
     uint8_t* upload = nullptr;
     if (tag.version == 2) {
-        size_t needed = acv::upload_size(data,size);
+        const auto* raw_bytes = static_cast<const uint8_t*>(data);
+        size_t needed = acv::upload_size_parsed(raw_bytes,size,tag);
         if (!needed) { report("UPLOAD_SIZE",D3DERR_INVALIDCALL); return D3DERR_INVALIDCALL; }
         upload = static_cast<uint8_t*>(HeapAlloc(GetProcessHeap(),0,needed));
         if (!upload) { report("UPLOAD_ALLOC",E_OUTOFMEMORY); return E_OUTOFMEMORY; }
-        if (!acv::prepare_upload(data,size,upload,needed)) {
+        if (!acv::prepare_upload_parsed(raw_bytes,size,tag,upload,needed)) {
             HeapFree(GetProcessHeap(),0,upload);
             report("UPLOAD_PREPARE",D3DERR_INVALIDCALL);
             return D3DERR_INVALIDCALL;
         }
-        if (acv::u32(static_cast<const uint8_t*>(data)+80) == 0x20) format = D3DFMT_A8R8G8B8;
+        if (acv::u32(raw_bytes+80) == 0x20) format = D3DFMT_A8R8G8B8;
         data = upload;
         size = UINT(needed);
     }

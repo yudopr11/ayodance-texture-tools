@@ -122,6 +122,66 @@ class TaggedArchiveTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             read_index(io.BytesIO(archive))
 
+    def test_native_and_python_crypto_parity(self):
+        from acv_tools import acv_crypto
+
+        sample = bytes((i * 37 + 11) & 255 for i in range(512))
+        iv = bytes(range(32, 64))
+        for tag in (0xff010002, 0xff020003, 0xff030009, 0xff050148, 0xff060025):
+            variant = (tag >> 16) & 255
+            for header in (False, True):
+                for decrypt in (False, True):
+                    use_iv = iv if (variant == 6 and not header) else None
+                    native_out = acv_crypto.crypt(sample, tag, header=header, decrypt=decrypt, iv=use_iv)
+                    saved_native = acv_crypto._NATIVE
+                    acv_crypto._NATIVE = None
+                    acv_crypto.blowfish_cipher.cache_clear()
+                    try:
+                        python_out = acv_crypto.crypt(sample, tag, header=header, decrypt=decrypt, iv=use_iv)
+                    finally:
+                        acv_crypto._NATIVE = saved_native
+                        acv_crypto.blowfish_cipher.cache_clear()
+                    self.assertEqual(native_out, python_out, f"tag={tag:08x} header={header} decrypt={decrypt}")
+        if acv_crypto.has_native_crypto():
+            native_bf = acv_crypto.ArchiveBlowfish(bytes(range(56)), 0xff050148, use_native=True)
+            python_bf = acv_crypto.ArchiveBlowfish(bytes(range(56)), 0xff050148, use_native=False)
+            self.assertEqual(native_bf.p, python_bf.p)
+            self.assertEqual(native_bf.s, python_bf.s)
+
+    def test_parallel_unpack_and_pack_with_compress_levels(self):
+        for variant in (0, 3, 5, 6):
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                template = root / "original.acv"
+                template.write_bytes(make_tagged_archive(variant, count=20))
+                seq = process_archive(template, workers=1)
+                par = process_archive(template, workers=4)
+                self.assertEqual(seq, par)
+
+                folder = root / "replacements"
+                for idx in (1, 4, 7, 10, 13, 16, 19):
+                    target = folder / f"texture/item{idx}.dds"
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(b"DDS " + f"replacement-{idx}-".encode() * 40)
+
+                out_par = root / "rebuilt_par.acv"
+                out_lvl1 = root / "rebuilt_lvl1.acv"
+                self.assertEqual(pack_archive(template, folder, out_par, compress_level=6, workers=4)["replaced"], 7)
+                self.assertEqual(pack_archive(template, folder, out_lvl1, compress_level=1, workers=2)["replaced"], 7)
+
+                for rebuilt_path in (out_par, out_lvl1):
+                    with template.open("rb") as original, rebuilt_path.open("rb") as rebuilt:
+                        before, after = read_index(original), read_index(rebuilt)
+                        self.assertEqual(len(before), len(after))
+                        for old, new in zip(before, after, strict=True):
+                            candidate = folder / old[0].replace("\\", "/")
+                            if candidate.is_file():
+                                self.assertEqual(decode_entry(rebuilt, new), candidate.read_bytes())
+                            else:
+                                original.seek(old[4])
+                                rebuilt.seek(new[4])
+                                self.assertEqual(original.read(old[2]), rebuilt.read(new[2]))
+
 
 if __name__ == "__main__":
     unittest.main()

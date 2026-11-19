@@ -25,6 +25,9 @@ htmlcov/
 /renderer_patch/test-backup/
 *.exe
 *.dll
+*.lib
+*.so
+*.dylib
 *.pdb
 *.obj
 *.o

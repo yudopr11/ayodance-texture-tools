@@ -33,6 +33,10 @@ python -B -m acv_tools.acv_pack original-data/DATA/262.acv texture-work/262 stag
 # Check the rebuilt archive's DDS entries without installing it.
 python -B -m acv_tools.acv_unpack staging/262.acv --textures-only
 
+# Optional: compile the native C crypto accelerator for ~150x-300x faster
+# Variant 3/5/6 decrypt/encrypt (automatic pure-Python fallback if omitted).
+python -B -m acv_tools.build_native
+
 # Small synthetic regression tests.
 python -B -m unittest tests.test_acv_unpack tests.test_acv_pack tests.test_stage_renderer_pilot tests.test_cli -v
 python -B -m acv_tools.acv_crypto
@@ -43,6 +47,9 @@ with `.\.venv\Scripts\python.exe`; no policy change or activation is necessary.
 Unpacking/repacking require Python 3.10+ and the two dependencies in that requirements
 file; the AI upscaler requires Python 3.11+. Use `-m acv_tools.<module>` rather than
 executing files inside the package directly.
+`acv_unpack`, `acv_pack`, and `texture_manifest build` accept `--workers N`
+(default: auto-scaled threads) and `acv_pack` accepts `--compress-level 0..9`
+(default: `6`). Set `ACV_DISABLE_NATIVE_CRYPTO=1` to force the pure-Python crypto path.
 No Ghidra, emulator, memory dump, game process or commercial tool is needed to
 run the completed unpacker/repacker.
 
