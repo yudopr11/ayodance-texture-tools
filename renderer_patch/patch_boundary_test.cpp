@@ -101,6 +101,22 @@ static void publication_failures() {
     const LONG expected_dependency = 10; LONG dependency = 11;
     acv::PatchCheck check{&dependency,&expected_dependency,sizeof dependency};
     assert(acv::publish_patches(api,&c,1,&check,1) == -1 && !api.calls && target == 0);
+    // Two disjoint targets on the same PAGE_READONLY page must both update and restore PAGE_READONLY.
+    auto* shared_page = static_cast<uint32_t*>(VirtualAlloc(nullptr,4096,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE));
+    assert(shared_page);
+    shared_page[0] = 0x11111111u; shared_page[24] = 0x22222222u;
+    DWORD old_prot = 0;
+    assert(VirtualProtect(shared_page,4096,PAGE_READONLY,&old_prot));
+    const uint32_t b0 = 0x11111111u, a0 = 0xaaaaaaaau, b1 = 0x22222222u, a1 = 0xbbbbbbbbu;
+    acv::PatchBytes same_page[2] = {
+        {shared_page,&b0,&a0,sizeof a0,0},
+        {shared_page+24,&b1,&a1,sizeof a1,0}};
+    acv::PatchWindows win_api;
+    assert(acv::publish_patches(win_api,same_page,2) == 2);
+    assert(shared_page[0] == a0 && shared_page[24] == a1);
+    MEMORY_BASIC_INFORMATION mbi{};
+    assert(VirtualQuery(shared_page,&mbi,sizeof mbi) && mbi.Protect == PAGE_READONLY);
+    VirtualFree(shared_page,0,MEM_RELEASE);
 }
 static LONG NTAPI failed_enumeration(HANDLE,HANDLE,ACCESS_MASK,ULONG,ULONG,HANDLE*) { return LONG(0xc0000022u); }
 extern "C" __declspec(dllexport) BOOL WINAPI RunBoundaryTest(const wchar_t* helper_path) {

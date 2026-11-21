@@ -97,7 +97,12 @@ This x86 `d3d9.dll` shim forwards Direct3D to Windows and, for the specifically 
   loader requests zero mips, instead of generating an extra full mip chain;
 - for version-2 P8/depth-one volume tags only, prepares a validated temporary upload:
   expands P8 palette indices to BGRA8, or clears depth-one volume header fields without
-  changing DXT blocks. The archive payload itself is not modified by the shim.
+  changing DXT blocks. The archive payload itself is not modified by the shim;
+- on the `0x03fd3000` client build in the scoped bundle, hooks `D3DXSaveSurfaceToFileA`
+  for `LoveParty_Poto_<digits>.dds` captures above 768 px height (width ≥ 1024) and writes
+  the same version-1 `ACVUI2X` logical-dimension tag (undoing the client's uniform
+  `height / 768` capture scale on both axes) into the saved DDS reserved header, preventing
+  the client's native double-scaling overflow while keeping full-resolution capture pixels.
 
 This is not a Start/Exit or archive-001 special case: the recovered ordinary DDS loaders apply the same logic to every marked DDS, regardless of filename, widget or archive. The main `acv_tools/acv_upscale.py` pipeline now adds the marker after image-cache publication; the cache stays untagged. Use verified native source payloads, never already-enhanced archives. Always verify the exact source and receipt hashes; a backup's folder name does not establish that it is untouched. GDI-generated text and code-generated textures use separate paths; this does not sharpen them or prove every UI draw path is covered.
 

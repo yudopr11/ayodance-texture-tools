@@ -22,8 +22,10 @@ static const GUID tag_guid = {0xa873069e,0x6206,0x43ef,{0x88,0x48,0x54,0x29,0x43
 struct ImageInfo { UINT Width, Height, Depth, MipLevels; D3DFORMAT Format; D3DRESOURCETYPE ResourceType; int ImageFileFormat; };
 using CreateTexture = HRESULT (WINAPI*)(IDirect3DDevice9*,const void*,UINT,UINT,UINT,UINT,DWORD,
     D3DFORMAT,D3DPOOL,DWORD,DWORD,D3DCOLOR,ImageInfo*,PALETTEENTRY*,IDirect3DTexture9**);
+using SaveSurface = HRESULT (WINAPI*)(LPCSTR,UINT,IDirect3DSurface9*,const PALETTEENTRY*,const RECT*);
 using AlphaQuery = unsigned char (__attribute__((thiscall)) *)(void*,int,int,D3DLOCKED_RECT*);
 static CreateTexture original_create;
+static SaveSurface original_save_surface;
 static AlphaQuery original_alpha;
 static bool trace_textures;
 static volatile LONG upload_sequence;
@@ -256,6 +258,58 @@ static HRESULT WINAPI hooked_create(IDirect3DDevice9* device,const void* data,UI
     return create_tagged(device,data,size,width,height,mips,usage,format,pool,filter,
         mip_filter,key,info,palette,texture,ordinary_ui,caller);
 }
+static void tag_saved_loveparty_dds(const char* path,IDirect3DSurface9* src_surface) {
+    if (!path || !src_surface || !acv::is_loveparty_photo_dds(path)) return;
+    IDirect3DDevice9* device = nullptr;
+    if (FAILED(src_surface->GetDevice(&device)) || !device) return;
+    D3DCAPS9 caps{};
+    HRESULT caps_hr = device->GetDeviceCaps(&caps);
+    IDirect3DSurface9* backbuffer = nullptr;
+    D3DSURFACE_DESC screen_desc{};
+    HRESULT bb_hr = device->GetBackBuffer(0,0,D3DBACKBUFFER_TYPE_MONO,&backbuffer);
+    if (SUCCEEDED(bb_hr) && backbuffer) {
+        bb_hr = backbuffer->GetDesc(&screen_desc);
+        backbuffer->Release();
+    }
+    device->Release();
+    if (FAILED(caps_hr) || FAILED(bb_hr)) return;
+    if (screen_desc.Width < 1024 || screen_desc.Height <= 768) return;
+    HANDLE file = CreateFileA(path,GENERIC_READ|GENERIC_WRITE,FILE_SHARE_READ,
+                              nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if (file == INVALID_HANDLE_VALUE) return;
+    uint8_t header[128]{};
+    DWORD read_bytes = 0;
+    bool ok = ReadFile(file,header,sizeof header,&read_bytes,nullptr) && read_bytes == sizeof header;
+    acv::Tag tag{};
+    if (ok && acv::tag_dds_header_v1(header,sizeof header,screen_desc.Width,screen_desc.Height,&tag)) {
+        bool pow2_ok = (acv::is_power_of_two(tag.physical_width) && acv::is_power_of_two(tag.physical_height)) ||
+            !(caps.TextureCaps & D3DPTEXTURECAPS_POW2) ||
+            (caps.TextureCaps & D3DPTEXTURECAPS_NONPOW2CONDITIONAL);
+        bool size_ok = tag.physical_width <= caps.MaxTextureWidth && tag.physical_height <= caps.MaxTextureHeight;
+        if (pow2_ok && size_ok) {
+            DWORD written = 0;
+            if (SetFilePointer(file,32,nullptr,FILE_BEGIN) == 32 &&
+                WriteFile(file,header+32,sizeof tag,&written,nullptr) && written == sizeof tag) {
+                static LONG first_capture_tag;
+                if (trace_textures || InterlockedCompareExchange(&first_capture_tag,1,0) == 0) {
+                    char msg[256];
+                    snprintf(msg,sizeof msg,
+                        "CAPTURE_TAG_OK: screen=%ux%u logical=%ux%u physical=%ux%u",
+                        unsigned(screen_desc.Width),unsigned(screen_desc.Height),
+                        tag.logical_width,tag.logical_height,tag.physical_width,tag.physical_height);
+                    log_message(msg);
+                }
+            }
+        }
+    }
+    CloseHandle(file);
+}
+[[maybe_unused]] static HRESULT WINAPI hooked_save_surface(LPCSTR dest_file,UINT format,
+    IDirect3DSurface9* src_surface,const PALETTEENTRY* palette,const RECT* src_rect) {
+    HRESULT result = original_save_surface(dest_file,format,src_surface,palette,src_rect);
+    if (SUCCEEDED(result) && format == 4 && src_rect) tag_saved_loveparty_dds(dest_file,src_surface);
+    return result;
+}
 static unsigned char __attribute__((fastcall)) hooked_alpha(void* object,void*,int x,int y,
                                                             D3DLOCKED_RECT* locked) {
     auto* bytes = static_cast<uint8_t*>(object);
@@ -377,6 +431,8 @@ extern "C" __declspec(dllexport) BOOL WINAPI AcvInstallV64() {
         void* erase_exit_addr = reinterpret_cast<void*>(is_new_build ? 0x00431524 : 0x00430f24);
         void* sized_release_addr = reinterpret_cast<void*>(is_new_build ? 0x00cd51fe : 0x00cbfb68);
         auto* slot = reinterpret_cast<CreateTexture*>(is_new_build ? 0x00d5b53c : 0x00d44534);
+        void* save_thunk_addr = reinterpret_cast<void*>(0x00cd50de);
+        auto* save_slot = reinterpret_cast<SaveSurface*>(0x00d5b59c);
         const uint32_t* cache_count_ptr = reinterpret_cast<const uint32_t*>(is_new_build ? 0x03c460cc : 0x03c2a064);
 
         const uint8_t loader_old[] = {0x55,0x8b,0xec,0x81,0xec,0x0c,0x01,0,0,0xa1,0xa4,0x10,0xc2,0x03,0x33,0xc5};
@@ -394,6 +450,7 @@ extern "C" __declspec(dllexport) BOOL WINAPI AcvInstallV64() {
         const uint8_t thunk_old[] = {0xff,0x25,0x34,0x45,0xd4,0x00};
         const uint8_t thunk_new[] = {0xff,0x25,0x3c,0xb5,0xd5,0x00};
         const uint8_t* thunk = is_new_build ? thunk_new : thunk_old;
+        const uint8_t save_thunk[] = {0xff,0x25,0x9c,0xb5,0xd5,0x00};
 
         const uint8_t release_old[] = {0xe9,0x63,0x00,0x00,0x00};
         const uint8_t release_new[] = {0xe9,0x5d,0x00,0x00,0x00};
@@ -478,6 +535,10 @@ extern "C" __declspec(dllexport) BOOL WINAPI AcvInstallV64() {
             log_bytes_mismatch("thunk", thunk_addr, thunk, 6);
             goto unsupported;
         }
+        if (is_new_build && memcmp(save_thunk_addr, save_thunk, sizeof save_thunk)) {
+            log_bytes_mismatch("save_thunk", save_thunk_addr, save_thunk, sizeof save_thunk);
+            goto unsupported;
+        }
         auto* map_slot = reinterpret_cast<ArchiveMap*>(0x00d4414c);
         auto* unmap_slot = reinterpret_cast<ArchiveUnmap*>(0x00d44150);
         auto* read_slot = reinterpret_cast<ArchiveRead*>(0x00d4413c);
@@ -508,6 +569,13 @@ extern "C" __declspec(dllexport) BOOL WINAPI AcvInstallV64() {
             log_message("INACTIVE: d3dx9_43 or CreateTexture slot mismatch");
             goto unsupported;
         }
+        if (is_new_build) {
+            original_save_surface = d3dx ? reinterpret_cast<SaveSurface>(GetProcAddress(d3dx,"D3DXSaveSurfaceToFileA")) : nullptr;
+            if (!original_save_surface || *save_slot != original_save_surface) {
+                log_message("INACTIVE: d3dx9_43 or SaveSurface slot mismatch");
+                goto unsupported;
+            }
+        }
         HMODULE pinned;
         if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_PIN,
             reinterpret_cast<LPCSTR>(&AcvInstallV64),&pinned)) goto unsupported;
@@ -532,6 +600,7 @@ extern "C" __declspec(dllexport) BOOL WINAPI AcvInstallV64() {
         memcpy(jump+1,&target,4);
         // Retain the trampoline after any write attempt: rollback must never leave a dangling code target.
         CreateTexture create_replacement = hooked_create;
+        [[maybe_unused]] SaveSurface save_replacement = hooked_save_surface;
         ArchiveMap map_replacement = hooked_archive_map;
         ArchiveUnmap unmap_replacement = hooked_archive_unmap;
         ArchiveRead read_replacement = hooked_archive_read;
@@ -555,6 +624,9 @@ extern "C" __declspec(dllexport) BOOL WINAPI AcvInstallV64() {
         if (!is_new_build) {
             scoped[2] = {cache_patch,acv::archive_cache_before,acv::archive_cache_after,sizeof acv::archive_cache_before,0};
             scoped_count = 3;
+        } else {
+            scoped[2] = {save_slot,&original_save_surface,&save_replacement,sizeof save_replacement,0};
+            scoped_count = 3;
         }
         const acv::CodeRange patch_ranges_old[] = {
             {0x005ab1ab,0x005ab1ab+sizeof acv::archive_cache_before},
@@ -564,7 +636,7 @@ extern "C" __declspec(dllexport) BOOL WINAPI AcvInstallV64() {
         const acv::CodeRange* patch_ranges = is_new_build ? patch_ranges_new : patch_ranges_old;
         size_t patch_range_count = is_new_build ? 1 : 2;
 
-        const acv::PatchCheck dependencies[] = {
+        acv::PatchCheck dependencies[13] = {
             {allocate_addr,allocate,sizeof allocate},
             {allocate_body_addr,allocate_body,sizeof allocate_body},
             {release_addr,release,5},
@@ -577,9 +649,11 @@ extern "C" __declspec(dllexport) BOOL WINAPI AcvInstallV64() {
             {erase_entry_addr,erase_entry,sizeof erase_entry},
             {erase_exit_addr,erase_exit,sizeof erase_exit},
             {sized_release_addr,sized_release,sizeof sized_release_old}};
+        size_t dependency_count = 12;
+        if (is_new_build) dependencies[dependency_count++] = {save_thunk_addr,save_thunk,sizeof save_thunk};
         uintptr_t caller_stack = uintptr_t(__builtin_frame_address(0))+sizeof(void*);
         LONG written = install_scoped_at_boundary(self_module,install_state,scoped,scoped_count,
-            dependencies,sizeof dependencies/sizeof dependencies[0],caller_stack,
+            dependencies,dependency_count,caller_stack,
             patch_ranges,patch_range_count,cache_count_ptr);
 #else
         LONG written = install_v64_writes(write_memory,changes,sizeof changes/sizeof changes[0]);

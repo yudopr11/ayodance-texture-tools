@@ -8,7 +8,7 @@ struct PatchBytes { void* target; const void* before; const void* after; size_t 
 struct PatchCheck { const void* target; const void* expected; size_t size; };
 // All other execution must be excluded. A writer failure can occur AFTER copying.
 // Always roll back the complete transaction, including the failing destination.
-// Destinations must occupy distinct pages; this is not a general overlapping-page writer.
+// Destinations must be byte-disjoint; reverse-order protection restore supports same-page targets.
 template<class Api> LONG publish_patches(Api& api,PatchBytes* changes,size_t count,
     const PatchCheck* checks=nullptr,size_t check_count=0) {
     for (size_t i=0;i<check_count;++i)
@@ -29,7 +29,7 @@ template<class Api> LONG publish_patches(Api& api,PatchBytes* changes,size_t cou
     }
     for (size_t i=0;i<count;++i) memcpy(changes[i].target,changes[i].after,changes[i].size);
     bool good = true;
-    for (size_t i=0;i<count;++i) {
+    for (size_t i=count;i-->0;) {
         auto& c = changes[i]; DWORD ignored;
         if (!api.flush(c.target,c.size)) good = false;
         if (!api.protect(c.target,c.size,c.protection,&ignored)) good = false;
@@ -43,7 +43,7 @@ template<class Api> LONG publish_patches(Api& api,PatchBytes* changes,size_t cou
     }
     if (!restored) return -2; // Do not memcpy into a page whose writability is unknown.
     for (size_t i=0;i<count;++i) memcpy(changes[i].target,changes[i].before,changes[i].size);
-    for (size_t i=0;i<count;++i) {
+    for (size_t i=count;i-->0;) {
         auto& c = changes[i]; DWORD ignored;
         if (!api.flush(c.target,c.size)) restored = false;
         if (!api.protect(c.target,c.size,c.protection,&ignored)) restored = false;
