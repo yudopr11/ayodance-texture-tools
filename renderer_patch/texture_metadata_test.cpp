@@ -115,7 +115,7 @@ int main() {
     struct SizeCase { uint32_t lw, lh, pw, ph; };
     const SizeCase cases[] = {
         {1, 1, 2, 2}, {3, 3, 6, 6}, {5, 7, 10, 14}, {16, 12, 32, 24},
-        {7, 5, 12, 9}, {300, 3, 600, 5}
+        {7, 5, 12, 9}, {300, 3, 600, 5}, {28, 35, 71, 65}, {26, 26, 64, 48}
     };
     static uint8_t buf[65536];
     static uint8_t got[4096], want[4096];
@@ -140,5 +140,61 @@ int main() {
             assert(memcmp(got, want, size_t(c.lw) * c.lh) == 0);
         }
     }
-    puts("DDS v1/v2 tags, palette/volume upload normalization and logical alpha checks passed");
+    // LoveParty captured DDS matching, logical UI dimension math and v1 header tagging.
+    assert(acv::is_loveparty_photo_dds("SCREENSHOT/LoveParty_Poto_05.dds"));
+    assert(acv::is_loveparty_photo_dds("SCREENSHOT\\loveparty_poto_00.DDS"));
+    assert(acv::is_loveparty_photo_dds("LoveParty_Poto_04.dds"));
+    assert(acv::is_loveparty_photo_dds("D:\\Games\\AyoDance\\SCREENSHOT\\LoveParty_Poto_12.dds"));
+    assert(!acv::is_loveparty_photo_dds(nullptr));
+    assert(!acv::is_loveparty_photo_dds(""));
+    assert(!acv::is_loveparty_photo_dds("SCREENSHOT/LoveParty_Poto_.dds"));
+    assert(!acv::is_loveparty_photo_dds("SCREENSHOT/LoveParty_Poto_05.jpg"));
+    assert(!acv::is_loveparty_photo_dds("SCREENSHOT/LoveParty_Poto_05.dds.tmp"));
+    assert(!acv::is_loveparty_photo_dds("SCREENSHOT/LoveParty_Poto_ab.dds"));
+    assert(!acv::is_loveparty_photo_dds("loveparty_re_photo_large_a.dds"));
+    assert(!acv::is_power_of_two(0) && acv::is_power_of_two(1) && acv::is_power_of_two(256));
+    assert(!acv::is_power_of_two(285) && !acv::is_power_of_two(480) && !acv::is_power_of_two(532));
+
+    uint32_t lw = 0, lh = 0;
+    assert(acv::compute_logical_ui_dimensions(532, 654, 2560, 1440, lw, lh) && lw == 284 && lh == 349);
+    assert(acv::compute_logical_ui_dimensions(480, 480, 2560, 1440, lw, lh) && lw == 256 && lh == 256);
+    assert(acv::compute_logical_ui_dimensions(399, 490, 1920, 1080, lw, lh) && lw == 284 && lh == 348);
+    assert(acv::compute_logical_ui_dimensions(360, 360, 1920, 1080, lw, lh) && lw == 256 && lh == 256);
+    assert(acv::compute_logical_ui_dimensions(799, 981, 3840, 2160, lw, lh) && lw == 284 && lh == 349);
+    assert(acv::compute_logical_ui_dimensions(720, 720, 3840, 2160, lw, lh) && lw == 256 && lh == 256);
+    assert(acv::compute_logical_ui_dimensions(535, 654, 3440, 1440, lw, lh) && lw == 285 && lh == 349);
+    assert(acv::compute_logical_ui_dimensions(480, 480, 3440, 1440, lw, lh) && lw == 256 && lh == 256);
+    assert(acv::compute_logical_ui_dimensions(333, 409, 1600, 900, lw, lh) && lw == 284 && lh == 349);
+    assert(acv::compute_logical_ui_dimensions(445, 546, 1600, 1200, lw, lh) && lw == 285 && lh == 349);
+    assert(acv::compute_logical_ui_dimensions(380, 465, 1280, 1024, lw, lh) && lw == 285 && lh == 349);
+    assert(!acv::compute_logical_ui_dimensions(285, 349, 1024, 768, lw, lh));
+    assert(!acv::compute_logical_ui_dimensions(285, 349, 1366, 768, lw, lh));
+    assert(!acv::compute_logical_ui_dimensions(267, 349, 1280, 720, lw, lh));
+    assert(!acv::compute_logical_ui_dimensions(380, 465, 768, 1024, lw, lh));
+    assert(!acv::compute_logical_ui_dimensions(222, 272, 800, 600, lw, lh));
+    assert(!acv::compute_logical_ui_dimensions(1, 1, 2560, 1440, lw, lh));
+
+    uint8_t cap[128] = {};
+    memcpy(cap, "DDS ", 4);
+    acv::put32(cap + 4, 124); acv::put32(cap + 8, 0x100f);
+    acv::put32(cap + 12, 654); acv::put32(cap + 16, 532);
+    acv::put32(cap + 76, 32); acv::put32(cap + 80, 0x41); acv::put32(cap + 88, 32);
+    acv::put32(cap + 108, 0x1000);
+    acv::Tag cap_tag{};
+    assert(!acv::tag_dds_header_v1(cap, 127, 2560, 1440, &cap_tag));
+    assert(!acv::tag_dds_header_v1(cap, sizeof cap, 1024, 768, &cap_tag));
+    assert(!acv::tag_dds_header_v1(cap, sizeof cap, 1366, 768, &cap_tag));
+    cap[32] = 1; assert(!acv::tag_dds_header_v1(cap, sizeof cap, 2560, 1440, &cap_tag)); cap[32] = 0;
+    acv::put32(cap + 112, 0x200000); assert(!acv::tag_dds_header_v1(cap, sizeof cap, 2560, 1440, &cap_tag)); acv::put32(cap + 112, 0);
+    // Palette DDS must be rejected and leave reserved bytes zeroed.
+    acv::put32(cap + 80, 0x20); acv::put32(cap + 88, 8);
+    assert(!acv::tag_dds_header_v1(cap, sizeof cap, 2560, 1440, &cap_tag));
+    for (size_t i = 0; i < sizeof(acv::Tag); ++i) assert(cap[32 + i] == 0);
+    acv::put32(cap + 80, 0x41); acv::put32(cap + 88, 32);
+    assert(acv::tag_dds_header_v1(cap, sizeof cap, 2560, 1440, &cap_tag));
+    assert(cap_tag.version == 1 && cap_tag.logical_width == 284 && cap_tag.logical_height == 349 &&
+           cap_tag.physical_width == 532 && cap_tag.physical_height == 654);
+    assert(acv::parse_tag(cap, sizeof cap, parsed) && parsed.logical_width == 284 && parsed.logical_height == 349);
+    assert(!acv::tag_dds_header_v1(cap, sizeof cap, 2560, 1440, &cap_tag)); // Already tagged.
+    puts("DDS v1/v2 tags, palette/volume upload normalization, capture tagging and logical alpha checks passed");
 }

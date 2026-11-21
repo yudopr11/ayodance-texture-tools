@@ -37,6 +37,70 @@ inline bool parse_tag(const void* data, size_t size, Tag& tag) {
         tag.physical_width == u32(bytes + 16) && tag.physical_height == u32(bytes + 12);
 }
 inline void put32(uint8_t* data, uint32_t value) { memcpy(data, &value, 4); }
+inline char ascii_lower(char c) {
+    return (c >= 'A' && c <= 'Z') ? char(c + ('a' - 'A')) : c;
+}
+inline bool is_power_of_two(uint32_t value) {
+    return value != 0 && (value & (value - 1)) == 0;
+}
+inline bool is_loveparty_photo_dds(const char* path) {
+    if (!path) return false;
+    const char* name = path;
+    for (const char* p = path; *p; ++p)
+        if (*p == '\\' || *p == '/') name = p + 1;
+    static constexpr char prefix[] = "loveparty_poto_";
+    constexpr size_t prefix_len = sizeof(prefix) - 1;
+    for (size_t i = 0; i < prefix_len; ++i)
+        if (!name[i] || ascii_lower(name[i]) != prefix[i]) return false;
+    const char* p = name + prefix_len;
+    const char* digits_start = p;
+    while (*p >= '0' && *p <= '9') ++p;
+    if (p == digits_start) return false;
+    static constexpr char suffix[] = ".dds";
+    for (size_t i = 0; i < sizeof(suffix); ++i)
+        if (ascii_lower(p[i]) != suffix[i]) return false;
+    return true;
+}
+inline bool compute_logical_ui_dimensions(uint32_t physical_width, uint32_t physical_height,
+                                          uint32_t screen_width, uint32_t screen_height,
+                                          uint32_t& logical_width, uint32_t& logical_height) {
+    if (!physical_width || !physical_height || physical_width > 16384 || physical_height > 16384) return false;
+    // Audition's capture crop applies (1024*H/(768*W)) * (W/1024) = H/768 on X and H/768 on Y
+    // whenever W >= 1024 and H > 768; modes with H <= 768 already capture at 1:1 logical scale.
+    if (screen_width < 1024 || screen_height <= 768 ||
+        screen_width > 65536 || screen_height > 65536) return false;
+    uint64_t lw = (uint64_t(physical_width) * 768u + screen_height / 2u) / screen_height;
+    uint64_t lh = (uint64_t(physical_height) * 768u + screen_height / 2u) / screen_height;
+    if (lw < 1 || lh < 1 || lw > physical_width || lh > physical_height ||
+        (lw == physical_width && lh == physical_height)) return false;
+    logical_width = uint32_t(lw);
+    logical_height = uint32_t(lh);
+    return true;
+}
+inline bool tag_dds_header_v1(uint8_t* header, size_t size, uint32_t screen_width,
+                              uint32_t screen_height, Tag* out_tag = nullptr) {
+    if (!header || size < 128) return false;
+    Tag existing{};
+    if (parse_tag(header, size, existing)) return false;
+    if (memcmp(header, "DDS ", 4) || u32(header + 4) != 124 ||
+        u32(header + 76) != 32 || !memcmp(header + 84, "DX10", 4) ||
+        u32(header + 112) != 0) return false;
+    for (size_t i = 0; i < sizeof(Tag); ++i)
+        if (header[32 + i] != 0) return false;
+    uint32_t phys_h = u32(header + 12);
+    uint32_t phys_w = u32(header + 16);
+    uint32_t lw = 0, lh = 0;
+    if (!compute_logical_ui_dimensions(phys_w, phys_h, screen_width, screen_height, lw, lh)) return false;
+    Tag tag{{'A', 'C', 'V', 'U', 'I', '2', 'X', 0}, 1, lw, lh, phys_w, phys_h};
+    memcpy(header + 32, &tag, sizeof tag);
+    Tag verified{};
+    if (!parse_tag(header, size, verified)) {
+        memset(header + 32, 0, sizeof tag);
+        return false;
+    }
+    if (out_tag) *out_tag = verified;
+    return true;
+}
 inline size_t upload_size_parsed(const uint8_t* bytes, size_t size, const Tag& tag) {
     if (tag.version != 2 || size > 64u*1024*1024) return 0;
     uint32_t levels = u32(bytes + 28);
