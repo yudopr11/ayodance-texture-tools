@@ -1,7 +1,6 @@
 #pragma once
 #include "patch_threads.hpp"
 #include "patch_publish.hpp"
-#include "archive_cache_patch.hpp"
 
 // Scoped experiment: no prefix views, I/O hooks, scratch hook or archive-phase detours.
 struct PatchRequest {
@@ -34,7 +33,7 @@ static bool commit_scoped_patch(void* context) {
     InterlockedExchange(request->state,request->result);
     return request->result == 2;
 }
-extern "C" __declspec(dllexport) BOOL WINAPI AcvCommitAtLoaderBoundary(HMODULE boundary) {
+extern "C" inline __declspec(dllexport) BOOL WINAPI AcvCommitAtLoaderBoundary(HMODULE boundary) {
     auto* request = pending_patch;
     if (!boundary || !request || request->acknowledged || request->thread != GetCurrentThreadId() ||
         *request->state != 1) return FALSE;

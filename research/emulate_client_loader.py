@@ -913,7 +913,7 @@ def self_test():
             probe.uc.mem_write(0x10200, struct.pack("<I", needed))
             probe.apis[0x5000] = "Process32" + operation + suffix
             probe.on_api(probe.uc, 0x5000, 1, None)
-            assert probe.uc.reg_read(UC_X86_REG_EAX) == int(pid is not None)
+            assert probe.uc.reg_read(UC_X86_REG_EAX) == (0 if pid is None else 1)
             if pid is None:
                 assert probe.last_error == 18
                 assert probe.u32(0x7ffde034) == 18

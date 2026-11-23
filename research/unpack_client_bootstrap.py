@@ -27,7 +27,7 @@ class Bits:
     def bit(self):
         if not self.mask:
             self.tag, self.mask = self.byte(), 128
-        value = int(bool(self.tag & self.mask))
+        value = 1 if (self.tag & self.mask) else 0
         self.mask >>= 1
         return value
 

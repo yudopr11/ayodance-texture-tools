@@ -9,7 +9,11 @@ using ClientRelease = void (__cdecl*)(void*);
 static ClientAllocate client_allocate;
 static ClientRelease client_release;
 static volatile LONG install_state;
-static void log_message(const char* message);
+using ArchiveLog = void (*)(const char*);
+static ArchiveLog archive_log_message;
+static inline void archive_log(const char* message) {
+    if (archive_log_message) archive_log_message(message);
+}
 using ArchiveMap = LPVOID (WINAPI*)(HANDLE,DWORD,DWORD,DWORD,SIZE_T);
 using ArchiveUnmap = BOOL (WINAPI*)(LPCVOID);
 using ArchiveRead = BOOL (WINAPI*)(HANDLE,LPVOID,DWORD,LPDWORD,LPOVERLAPPED);
@@ -51,7 +55,7 @@ struct ArchiveFileRead {
     static void release(void*,void* data) { client_release(data); }
 };
 // Captured frame: return address followed by the original stdcall arguments.
-extern "C" BOOL __cdecl archive_read_dispatch(uint32_t* frame,uint32_t owner,void* resource,uint32_t bp) {
+extern "C" inline __attribute__((used)) BOOL __cdecl archive_read_dispatch(uint32_t* frame,uint32_t owner,void* resource,uint32_t bp) {
     if (frame[0] != 0x005ab427 || install_state != 2)
         return original_archive_read(HANDLE(frame[1]),LPVOID(frame[2]),frame[3],LPDWORD(frame[4]),LPOVERLAPPED(frame[5]));
     auto r = static_cast<uint8_t*>(resource);
@@ -90,7 +94,7 @@ extern "C" BOOL __cdecl archive_read_dispatch(uint32_t* frame,uint32_t owner,voi
     bool ok = acv::read_archive_fallback(*owned,LPVOID(frame[2]),frame[3],entry,owner,
         uint64_t(size.QuadPart),ops,received);
     *LPDWORD(frame[4]) = received;
-    if (!ok) { log_message("ARCHIVE_READ_FAIL: owned input cleared before native decode"); SetLastError(context.error); }
+    if (!ok) { archive_log("ARCHIVE_READ_FAIL: owned input cleared before native decode"); SetLastError(context.error); }
     return ok ? TRUE : FALSE;
 }
 struct ArchiveMapRequest {
@@ -100,7 +104,7 @@ struct ArchiveMapRequest {
         return original_archive_map(request.mapping,request.access,request.high,request.low,SIZE_T(bytes));
     }
 };
-extern "C" void* __cdecl archive_map_dispatch(uint32_t* frame,uint32_t esi,uint32_t edi) {
+extern "C" inline __attribute__((used)) void* __cdecl archive_map_dispatch(uint32_t* frame,uint32_t esi,uint32_t edi) {
     if (install_state != 2 || (frame[0] != 0x005ab37c && frame[0] != 0x005a7ad5))
         return original_archive_map(HANDLE(frame[1]),frame[2],frame[3],frame[4],frame[5]);
     if (frame[0] == 0x005ab37c) { // Existing retained views bypass this call and must stay live.
@@ -118,7 +122,7 @@ extern "C" void* __cdecl archive_map_dispatch(uint32_t* frame,uint32_t esi,uint3
     if (!GetFileSizeEx(file,&size) || size.QuadPart <= 0 || uint64_t(size.QuadPart) > UINT32_MAX) return nullptr;
     ArchiveFileRead context{file}; uint32_t prefix = 0;
     if (!acv::archive_index_extent({&context,ArchiveFileRead::read},uint64_t(size.QuadPart),owner,prefix)) {
-        log_message("ARCHIVE_INDEX_FAIL: bounded wire extent rejected"); SetLastError(ERROR_BAD_FORMAT); return nullptr;
+        archive_log("ARCHIVE_INDEX_FAIL: bounded wire extent rejected"); SetLastError(ERROR_BAD_FORMAT); return nullptr;
     }
     const uint8_t* retained = reinterpret_cast<const uint8_t*>(0x0119f9c8);
     uint64_t bytes = owner == retained[0] || owner == retained[1] ? uint64_t(size.QuadPart) : prefix;
@@ -127,7 +131,7 @@ extern "C" void* __cdecl archive_map_dispatch(uint32_t* frame,uint32_t esi,uint3
     AcquireSRWLockExclusive(&archive_views_lock);
     void* view = archive_views.map(bytes,&request,ArchiveMapRequest::create);
     ReleaseSRWLockExclusive(&archive_views_lock);
-    if (!view) { log_message("ARCHIVE_MAP_FAIL: view budget or OS mapping refused"); SetLastError(ERROR_NOT_ENOUGH_MEMORY); }
+    if (!view) { archive_log("ARCHIVE_MAP_FAIL: view budget or OS mapping refused"); SetLastError(ERROR_NOT_ENOUGH_MEMORY); }
     return view;
 }
 static bool archive_destroy_view(void*,void* base) { return original_archive_unmap(base) != FALSE; }
@@ -139,7 +143,7 @@ static BOOL WINAPI hooked_archive_unmap(LPCVOID base) {
     ReleaseSRWLockExclusive(&archive_views_lock);
     return result;
 }
-extern "C" void* __cdecl archive_scratch_dispatch(uint32_t requested,uint8_t* resource) {
+extern "C" inline __attribute__((used)) void* __cdecl archive_scratch_dispatch(uint32_t requested,uint8_t* resource) {
     if (install_state != 2) return client_allocate(requested);
     if (!archive_memory(resource,84)) return nullptr;
     uint32_t raw = *reinterpret_cast<uint32_t*>(resource+12);
@@ -149,15 +153,15 @@ extern "C" void* __cdecl archive_scratch_dispatch(uint32_t requested,uint8_t* re
     return client_allocate(size);
 }
 // Capture the native nonvolatile registers and original stack before any C++ prologue.
-extern "C" __attribute__((naked)) BOOL WINAPI hooked_archive_read(HANDLE,LPVOID,DWORD,LPDWORD,LPOVERLAPPED) {
+extern "C" inline __attribute__((naked)) BOOL WINAPI hooked_archive_read(HANDLE,LPVOID,DWORD,LPDWORD,LPOVERLAPPED) {
     __asm__ volatile("movl %esp,%eax\n\tpushl %ebp\n\tpushl %edi\n\tpushl %esi\n\tpushl %eax\n\t"
         "call _archive_read_dispatch\n\taddl $16,%esp\n\tretl $20\n\t");
 }
-extern "C" __attribute__((naked)) LPVOID WINAPI hooked_archive_map(HANDLE,DWORD,DWORD,DWORD,SIZE_T) {
+extern "C" inline __attribute__((naked)) LPVOID WINAPI hooked_archive_map(HANDLE,DWORD,DWORD,DWORD,SIZE_T) {
     __asm__ volatile("movl %esp,%eax\n\tpushl %edi\n\tpushl %esi\n\tpushl %eax\n\t"
         "call _archive_map_dispatch\n\taddl $12,%esp\n\tretl $20\n\t");
 }
-extern "C" __attribute__((naked)) void* __cdecl hooked_archive_scratch(size_t) {
+extern "C" inline __attribute__((naked)) void* __cdecl hooked_archive_scratch(size_t) {
     __asm__ volatile("movl 4(%esp),%eax\n\tpushl %edi\n\tpushl %eax\n\t"
         "call _archive_scratch_dispatch\n\taddl $8,%esp\n\tretl\n\t");
 }

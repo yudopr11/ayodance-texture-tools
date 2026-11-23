@@ -1,6 +1,5 @@
 // Isolated offline-emulator fixture, NOT a renderer DLL; never install into the game.
 #include "archive_io_hooks.hpp"
-static void log_message(const char*) {}
 extern "C" __declspec(dllexport) void __cdecl InitArchiveIoTest(
     uintptr_t allocate,uintptr_t release,uintptr_t read,uintptr_t map,uintptr_t unmap) {
     client_allocate = reinterpret_cast<ClientAllocate>(allocate);

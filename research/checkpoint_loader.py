@@ -101,8 +101,11 @@ def restore(directory, log, *, probe_type=Probe):
         attributes = manifest["attributes"]
         if set(attributes) != set(vars(probe)) - {"uc", "log", "started", "source_bytes"}:
             raise ValueError("Probe state fields changed; update checkpoint schema")
-        for field in INTEGER_KEY_MAPS:
-            attributes[field] = {int(key): value for key, value in attributes[field].items()}
+        try:
+            for field in INTEGER_KEY_MAPS:
+                attributes[field] = {int(key): value for key, value in attributes[field].items()}
+        except (TypeError, ValueError) as error:
+            raise ValueError("Invalid integer key in checkpoint manifest") from error
         attributes["handles"] = set(attributes["handles"])
         attributes["mappings"] = dict.fromkeys(attributes["mappings"], source)
         vars(probe).update(attributes)

@@ -133,9 +133,14 @@ class Reader:
     def api(self, name, args):
         if name == "create_file":
             match = re.search(r"(\d+)\.acv$", self.string(args[0]), re.I)
-            if not match or int(match[1]) not in self.fixtures:
+            if not match:
                 raise AssertionError("Unexpected native archive filename")
-            number = int(match[1])
+            try:
+                number = int(match[1])
+            except ValueError as error:
+                raise AssertionError("Unexpected native archive filename") from error
+            if number not in self.fixtures:
+                raise AssertionError("Unexpected native archive filename")
             self.serial += 1
             self.handles[self.serial] = ("file", number)
             return self.serial

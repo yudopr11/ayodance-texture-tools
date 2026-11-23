@@ -330,7 +330,7 @@ int main() {
     assert(info.Width == 2 && info.Height == 1 && has_tag);
     // Cache allocation, reuse and matching native-owner cleanup without invoking client code.
     uint8_t object[0x430] = {}, pixels[32] = {};
-    memcpy(object+4,&texture,sizeof texture); acv::put32(object+8,2); acv::put32(object+12,1);
+    memcpy(object+4,&texture,sizeof(IDirect3DTexture9*)); acv::put32(object+8,2); acv::put32(object+12,1);
     pixels[3] = 7; pixels[7] = 255; pixels[31] = 200;
     D3DLOCKED_RECT lock{16,pixels};
     auto** cache = reinterpret_cast<uint8_t**>(object+0x42c);

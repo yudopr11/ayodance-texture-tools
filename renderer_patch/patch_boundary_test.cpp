@@ -1,14 +1,14 @@
 // CPU-only synthetic host/helper. Never loads the client or creates a D3D device.
 #include <windows.h>
-#include <stdint.h>
-#include "patch_threads.hpp"
-#include "patch_publish.hpp"
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
 #include <assert.h>
 
 #ifdef ACV_BOUNDARY_TEST_HOST
+#include <stdint.h>
+#include "patch_threads.hpp"
+#include "patch_publish.hpp"
 static acv::NextThread real_next;
 static acv::QueryThread real_query;
 static HANDLE ready_event, stop_event, child_thread;
