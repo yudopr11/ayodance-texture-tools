@@ -386,6 +386,7 @@ extern "C" __declspec(dllexport) BOOL WINAPI AcvInstallV64() {
     DWORD module_size = GetModuleFileNameA(self_module,module_path,MAX_PATH);
     trace_textures = trace_requested(module_size && module_size < MAX_PATH ? module_path : nullptr);
     log_message(trace_textures ? "SESSION: renderer diagnostics v1 trace=1" : "SESSION: renderer diagnostics v1 trace=0");
+    archive_log_message = log_message;
     if (!native_patch_startup_verified && !scoped_cache_test) {
         InterlockedExchange(&install_state,-1);
         log_message("INACTIVE: candidate native patches withheld; archive-loader quiescence is not established");

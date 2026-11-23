@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import io
 import json
+import math
 import shutil
 import struct
 import subprocess
@@ -208,7 +209,7 @@ def target_size(width, height):
     scale = min(2, 2048 / max(width, height))
     if scale <= 1:
         return width, height
-    return max(1, int(width * scale)), max(1, int(height * scale))
+    return max(1, math.floor(width * scale)), max(1, math.floor(height * scale))
 
 
 AI_PIPELINE = 'realesrgan-x4plus-20220424-2x-cap2048-v1'
@@ -614,7 +615,7 @@ def main():
     report = {'archives': len(archives), 'verified': sum(r['status'] == 'verified' for r in results),
               'results': sorted(results, key=lambda r: r['archive'])}
     (staging / 'batch-report.json').write_text(json.dumps(report, indent=2) + '\n')
-    return int(report['verified'] != len(archives))
+    return 0 if report['verified'] == len(archives) else 1
 
 
 if __name__ == '__main__':

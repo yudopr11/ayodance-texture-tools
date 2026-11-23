@@ -43,7 +43,8 @@ class IndexReader(Reader):
         def arg(n):
             return self.get(esp + 4 * (n + 1))
         if address == 0xC39100:
-            if arg(4) != self.tag or tuple(arg(i) for i in (3, 5, 6, 7)) != (0, int(self.tag < 0xff060000), int(self.tag >= 0xff060000), 0):
+            expected_flags = (0, 1 if self.tag < 0xff060000 else 0, 1 if self.tag >= 0xff060000 else 0, 0)
+            if arg(4) != self.tag or tuple(arg(i) for i in (3, 5, 6, 7)) != expected_flags:
                 raise AssertionError("Native index crypto arguments changed")
             data = bytes(uc.mem_read(arg(1), arg(2)))
             decoded = crypt(data, self.tag, header=True)
@@ -91,8 +92,12 @@ def inspect(image, archive):
     uc.mem_map(destination, align(max(count * 212, 1)))
     native.put(0x20003000, destination, destination, destination + count * 212)
     native.put(0x20003100, 8)
+    try:
+        archive_number = int(archive.stem)
+    except ValueError as error:
+        raise ValueError(f"Expected numeric archive stem: {archive.name}") from error
     result = native.call(0x5A6250, tag, count, source, 0x20003100,
-                         0x20003000, int(archive.stem), 32 if variant == 6 else 0,
+                         0x20003000, archive_number, 32 if variant == 6 else 0,
                          instruction_limit=100_000_000)
     if result & 255 != 1 or native.get(0x20003100) != base:
         raise AssertionError(f"Native index failed/cursor differs: {archive}, result={result:x}, cursor={native.get(0x20003100)}, expected={base}")

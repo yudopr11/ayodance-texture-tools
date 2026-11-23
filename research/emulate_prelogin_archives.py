@@ -63,7 +63,7 @@ def replay(image, catalog, failed_open=None):
         elif address in (0x5AADB0, 0x5A6130):
             owner = catalog.get(name(arg))
             if address == 0x5AADB0:  # Modeled global index membership.
-                result = int(owner is not None)
+                result = 0 if owner is None else 1
             else:
                 if owner is None:
                     raise AssertionError("Native lookup requested an absent catalog node")
@@ -93,9 +93,9 @@ def replay(image, catalog, failed_open=None):
         raise RuntimeError("Native preflight instruction/time budget exceeded")
     if [row["requested_archive"] for row in lookups] != list(range(44, 331)):
         raise AssertionError(f"Native preflight requests differ: {len(lookups)} lookups, {lookups[:2]}, {lookups[-2:]}")
-    if len(released) != len(opened) - int(failed_open in opened):
+    if len(released) != len(opened) - (1 if failed_open in opened else 0):
         raise AssertionError("Native preflight resource release mismatch")
-    return {"validation_flag": int(uc.mem_read(0x3C4848C, 1)[0]),
+    return {"validation_flag": uc.mem_read(0x3C4848C, 1)[0],
             "lookups": lookups, "resource_opens": len(opened), "resource_releases": len(released)}
 
 

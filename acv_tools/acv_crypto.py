@@ -260,6 +260,8 @@ class _NativeRijndael256:
     def __init__(self, key):
         if len(key) != 32:
             raise ValueError("Rijndael-256 key must be 32 bytes")
+        if _NATIVE is None:
+            raise RuntimeError("Native ACV crypto library is unavailable")
         key_bytes = key if isinstance(key, bytes) else bytes(key)
         self._native = _NATIVE
         self._ke = (ctypes.c_uint32 * 120)()

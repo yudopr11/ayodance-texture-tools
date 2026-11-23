@@ -10,7 +10,6 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <string.h>
 
 #ifdef _WIN32
 #define ACV_EXPORT __declspec(dllexport)
@@ -427,7 +426,9 @@ ACV_EXPORT int acv_rijndael256_cbc_encrypt(const uint32_t ke[15 * 8], const uint
                         RJ_T3[(t[(i + 3) & 7] >> 8) & 0xffu] ^
                         RJ_T4[t[(i + 4) & 7] & 0xffu]) ^ rk[i];
             }
-            memcpy(t, a, sizeof(t));
+            for (int i = 0; i < 8; ++i) {
+                t[i] = a[i];
+            }
         }
         const uint32_t *rk_last = ke + 14 * 8;
         for (int i = 0; i < 8; ++i) {
@@ -471,7 +472,9 @@ ACV_EXPORT int acv_rijndael256_cbc_decrypt(const uint32_t kd[15 * 8], const uint
                         RJ_T7[(t[(i + 5) & 7] >> 8) & 0xffu] ^
                         RJ_T8[t[(i + 4) & 7] & 0xffu]) ^ rk[i];
             }
-            memcpy(t, a, sizeof(t));
+            for (int i = 0; i < 8; ++i) {
+                t[i] = a[i];
+            }
         }
         const uint32_t *rk_last = kd + 14 * 8;
         for (int i = 0; i < 8; ++i) {

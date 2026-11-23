@@ -1,6 +1,5 @@
 #pragma once
 #include <windows.h>
-#include <stdint.h>
 #include <string.h>
 
 namespace acv {

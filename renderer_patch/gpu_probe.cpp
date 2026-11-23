@@ -5,6 +5,18 @@
 #endif
 #include <assert.h>
 
+struct ScopedBytes {
+    uint8_t* data;
+    explicit ScopedBytes(size_t size,bool zero=false)
+        : data(static_cast<uint8_t*>(HeapAlloc(GetProcessHeap(),zero ? HEAP_ZERO_MEMORY : 0,size ? size : 1))) {}
+    ~ScopedBytes() { if (data) HeapFree(GetProcessHeap(),0,data); }
+    ScopedBytes(const ScopedBytes&) = delete;
+    ScopedBytes& operator=(const ScopedBytes&) = delete;
+    uint8_t* get() const { return data; }
+    uint8_t& operator[](size_t index) const { return data[index]; }
+    explicit operator bool() const { return data != nullptr; }
+};
+
 int main(int argc,char** argv) {
     if (argc < 3) { fprintf(stderr,"Expected absolute d3dx9_43.dll and pilot d3d9.dll paths, then optional tagged DDS files\n"); return 2; }
     HMODULE proxy = LoadLibraryA(argv[2]);
@@ -21,7 +33,7 @@ int main(int argc,char** argv) {
     IDirect3D9* d3d = factory(D3D_SDK_VERSION); assert(d3d);
     D3DADAPTER_IDENTIFIER9 adapter{};
     assert(SUCCEEDED(d3d->GetAdapterIdentifier(D3DADAPTER_DEFAULT,0,&adapter)));
-    printf("Adapter: %s\n",adapter.Description);
+    fprintf(stdout,"Adapter: %s\n",adapter.Description);
     fflush(stdout);
     HWND window = CreateWindowExA(0,"STATIC","ACV offline renderer probe",WS_POPUP,0,0,32,32,
                                   nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
@@ -48,7 +60,7 @@ int main(int argc,char** argv) {
     puts("PASS: x86 DLL exports, real D3DX tagged-DDS parser and fail-closed image guard");
     IDirect3DDevice9* device = nullptr;
     HRESULT device_result = d3d->CreateDevice(0,D3DDEVTYPE_HAL,window,D3DCREATE_SOFTWARE_VERTEXPROCESSING,&pp,&device);
-    printf("CreateDevice HRESULT: 0x%08lx\n",static_cast<unsigned long>(device_result));
+    fprintf(stdout,"CreateDevice HRESULT: 0x%08lx\n",static_cast<unsigned long>(device_result));
     fflush(stdout);
     if (FAILED(device_result)) {
         fprintf(stderr,"GPU checks blocked: close full-screen D3D applications and retry; no game was changed.\n");
@@ -83,11 +95,11 @@ int main(int argc,char** argv) {
     texture->Release();
     // Reproduce the recorded single-level 640x1024 UI request without the game.
     const UINT ui_width = 640, ui_height = 1024, ui_size = 128+ui_width*ui_height*4;
-    auto* ui = static_cast<uint8_t*>(calloc(1,ui_size)); assert(ui);
-    memcpy(ui,dds,128);
-    acv::put32(ui+12,ui_height); acv::put32(ui+16,ui_width); acv::put32(ui+20,ui_width*4);
+    ScopedBytes ui(ui_size,true); assert(ui);
+    memcpy(ui.get(),dds,128);
+    acv::put32(ui.get()+12,ui_height); acv::put32(ui.get()+16,ui_width); acv::put32(ui.get()+20,ui_width*4);
     acv::Tag ui_tag = {{'A','C','V','U','I','2','X',0},1,320,512,ui_width,ui_height};
-    memcpy(ui+32,&ui_tag,sizeof ui_tag);
+    memcpy(ui.get()+32,&ui_tag,sizeof ui_tag);
     for (UINT pixel=128; pixel<ui_size; pixel+=4) { ui[pixel]=50; ui[pixel+1]=100; ui[pixel+2]=150; ui[pixel+3]=127; }
     auto storage = [](IDirect3DTexture9* value) {
         uint64_t bytes = 0;
@@ -99,12 +111,12 @@ int main(int argc,char** argv) {
         return bytes;
     };
     IDirect3DTexture9* baseline = nullptr;
-    result = original_create(device,ui,ui_size,ui_width,ui_height,0,0,D3DFMT_UNKNOWN,D3DPOOL_MANAGED,
+    result = original_create(device,ui.get(),ui_size,ui_width,ui_height,0,0,D3DFMT_UNKNOWN,D3DPOOL_MANAGED,
                              3,3,0,&info,nullptr,&baseline);
     assert(SUCCEEDED(result) && baseline && baseline->GetLevelCount() == 11);
     uint64_t before = storage(baseline);
     texture = nullptr;
-    result = create_tagged(device,ui,ui_size,1,1,0,0,D3DFMT_UNKNOWN,D3DPOOL_MANAGED,
+    result = create_tagged(device,ui.get(),ui_size,1,1,0,0,D3DFMT_UNKNOWN,D3DPOOL_MANAGED,
                           3,3,0,&info,nullptr,&texture,true);
     assert(SUCCEEDED(result) && texture && texture->GetLevelCount() == 1);
     assert(info.Width == 320 && info.Height == 512);
@@ -118,20 +130,20 @@ int main(int argc,char** argv) {
         assert(!memcmp(static_cast<uint8_t*>(baseline_lock.pBits)+row*baseline_lock.Pitch,
                        static_cast<uint8_t*>(lock.pBits)+row*lock.Pitch,ui_width*4));
     texture->UnlockRect(0); baseline->UnlockRect(0);
-    printf("PASS: single-level UI stays 640x1024 BGRA8/managed, 11 -> 1 levels, %llu -> %llu texel bytes; level-zero RGBA unchanged\n",
-           static_cast<unsigned long long>(before),static_cast<unsigned long long>(after));
-    baseline->Release(); texture->Release(); free(ui);
+    fprintf(stdout,"PASS: single-level UI stays 640x1024 BGRA8/managed, 11 -> 1 levels, %llu -> %llu texel bytes; level-zero RGBA unchanged\n",
+            static_cast<unsigned long long>(before),static_cast<unsigned long long>(after));
+    baseline->Release(); texture->Release();
     for (int argument=3; argument<argc; ++argument) {
         FILE* file = fopen(argv[argument],"rb"); assert(file);
         assert(!fseek(file,0,SEEK_END));
         long length = ftell(file); assert(length >= 128 && length <= 64*1024*1024);
         rewind(file);
-        auto* input = static_cast<uint8_t*>(malloc(size_t(length))); assert(input);
-        assert(fread(input,1,size_t(length),file) == size_t(length)); fclose(file);
-        acv::Tag sample{}; assert(acv::parse_tag(input,size_t(length),sample));
-        uint32_t levels = acv::u32(input+28); if (!levels) levels = 1;
+        ScopedBytes input{size_t(length)}; assert(input);
+        assert(fread(input.get(),1,size_t(length),file) == size_t(length)); fclose(file);
+        acv::Tag sample{}; assert(acv::parse_tag(input.get(),size_t(length),sample));
+        uint32_t levels = acv::u32(input.get()+28); if (!levels) levels = 1;
         texture = nullptr;
-        result = create_tagged(device,input,UINT(length),1,1,levels,0,D3DFMT_UNKNOWN,
+        result = create_tagged(device,input.get(),UINT(length),1,1,levels,0,D3DFMT_UNKNOWN,
             D3DPOOL_MANAGED,3,3,0,&info,nullptr,&texture,true);
         assert(SUCCEEDED(result) && texture);
         assert(SUCCEEDED(texture->GetLevelDesc(0,&desc)));
@@ -139,11 +151,11 @@ int main(int argc,char** argv) {
                info.Width == sample.logical_width && info.Height == sample.logical_height &&
                texture->GetLevelCount() == levels);
         assert(SUCCEEDED(texture->LockRect(0,&lock,nullptr,D3DLOCK_READONLY)));
-        auto* alpha = static_cast<uint8_t*>(malloc(size_t(sample.logical_width)*sample.logical_height));
-        assert(alpha && acv::build_alpha(alpha,sample,static_cast<const uint8_t*>(lock.pBits),
+        ScopedBytes alpha(size_t(sample.logical_width)*sample.logical_height);
+        assert(alpha && acv::build_alpha(alpha.get(),sample,static_cast<const uint8_t*>(lock.pBits),
                lock.Pitch,desc.Format,desc.Width,desc.Height));
-        free(alpha); texture->UnlockRect(0); texture->Release(); free(input);
-        printf("PASS: tagged file GPU dimensions, %u mips and native alpha: %s\n",levels,argv[argument]);
+        texture->UnlockRect(0); texture->Release();
+        fprintf(stdout,"PASS: tagged file GPU dimensions, %u mips and native alpha: %s\n",levels,argv[argument]);
     }
     device->Release(); d3d->Release(); DestroyWindow(window); FreeLibrary(proxy); FreeLibrary(dx);
     puts("PASS: x86 DLL exports, actual D3DX DDS parsing, physical GPU size, logical metadata, alpha mapping, untagged path, fail-closed image guard");
